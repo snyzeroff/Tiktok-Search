@@ -56,7 +56,7 @@ La recherche porte sur :
 | Champ | Source |
 |---|---|
 | **Légende** (description) et **hashtags** | page TikTok (repli yt-dlp, puis oEmbed) |
-| **Transcription** (ce qui est dit) | sous-titres TikTok s'ils existent, sinon **Whisper** en local |
+| **Transcription** (ce qui est dit) | sous-titres TikTok s'ils existent, sinon **Whisper** en local (2e passe) |
 | **Texte à l'écran** | OCR (Tesseract) sur les smart screens d'une vidéo, ou sur chaque page d'un carrousel |
 | **Auteur** | métadonnées |
 
@@ -84,7 +84,7 @@ copy .env.example .env
 tiktok-search serve
 ```
 
-`ffmpeg` doit être installé pour la transcription et l'OCR (Windows : `winget install Gyan.FFmpeg`).
+`ffmpeg` n'est nécessaire que pour l'OCR (Windows : `winget install Gyan.FFmpeg`) ; Whisper lit la vidéo directement.
 La synchro du compte utilise Edge ou Chrome déjà installés ; sinon : `playwright install chromium`.
 
 ## Récupérer ses favoris
@@ -181,6 +181,22 @@ transcription sont supprimées juste après traitement.
 > ⚠️ Respecte les conditions d'utilisation de TikTok : l'outil est conçu pour un usage personnel sur
 > ses propres favoris. Le téléchargement via yt-dlp peut casser quand TikTok modifie son site
 > (`pip install -U yt-dlp`).
+
+## Vitesse d'indexation
+
+L'indexation se fait en **deux passes** :
+
+1. **Légendes, hashtags, sous-titres TikTok, images des carrousels** pour toutes les vidéos : une seule
+   requête par vidéo, en parallèle. Tout est **cherchable en quelques minutes**, même pour des milliers de favoris.
+2. **Transcription Whisper** (et OCR) des vidéos sans sous-titres, par petits paquets. Les favoris
+   ajoutés entre-temps repassent devant.
+
+Pour aller plus vite :
+- la vidéo est téléchargée par le lien déjà présent dans la page (yt-dlp seulement en secours) ;
+- Whisper lit directement le MP4 (pas de conversion en WAV), utilise tous les cœurs sauf un ;
+- `TTS_WHISPER_LANG=fr` saute la détection de langue ; `TTS_WHISPER_MODEL=base` est ≈ 3× plus rapide que `small` ;
+- `TTS_WORKERS` (fils en parallèle) et `TTS_REQUEST_DELAY` (espacement des pages TikTok) règlent la 1re passe :
+  plus vite = plus de risque de blocage temporaire par TikTok.
 
 ## Robustesse
 

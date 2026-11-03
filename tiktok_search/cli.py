@@ -97,8 +97,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Transcription Whisper : {'oui' if transcribe.is_available() and settings.transcribe == 'auto' else 'non'}"
               f" · OCR : {'oui' if settings.ocr and ocr.is_available() else 'non'}")
 
-        if not pipeline.ffmpeg_available():
-            print("⚠️  ffmpeg introuvable : pas de transcription Whisper ni d'OCR.")
+        if settings.ocr and not pipeline.ffmpeg_available():
+            print("⚠️  ffmpeg introuvable : pas d'OCR.")
         marks = {"done": "✓", "unavailable": "∅", "error": "✗"}
 
         def progress(i: int, n: int, v: dict, status: str) -> None:

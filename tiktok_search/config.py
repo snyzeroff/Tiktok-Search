@@ -35,6 +35,8 @@ class Settings:
     data_dir: Path = field(default_factory=lambda: Path(os.getenv("TTS_DATA_DIR", "./data")))
     transcribe: str = field(default_factory=lambda: os.getenv("TTS_TRANSCRIBE", "auto"))
     whisper_model: str = field(default_factory=lambda: os.getenv("TTS_WHISPER_MODEL", "small"))
+    whisper_lang: str = field(default_factory=lambda: os.getenv("TTS_WHISPER_LANG", "").strip().lower())
+    whisper_threads: int = field(default_factory=lambda: max(0, _num("TTS_WHISPER_THREADS", 0, int)))
     ocr: bool = field(default_factory=lambda: _bool("TTS_OCR", False))
     ocr_lang: str = field(default_factory=lambda: os.getenv("TTS_OCR_LANG", "fra+eng"))
     keep_video: bool = field(default_factory=lambda: _bool("TTS_KEEP_VIDEO", False))

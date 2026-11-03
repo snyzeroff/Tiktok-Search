@@ -94,8 +94,86 @@ def ocr_screens(shots: list[screens.Screen], lang: str) -> list[dict]:
     return segs
 
 
-def process_video(db: Database, settings: Settings, video: dict, client: TikTokPageClient) -> str:
-    """Indexe une vidéo. Renvoie le statut final ; lève ``Blocked`` si TikTok bloque."""
+def _media_needs(settings: Settings, has_transcript: bool, has_ocr: bool) -> tuple[bool, bool]:
+    """(transcrire avec Whisper ?, OCR ?) pour une vidéo. Whisper lit le MP4 lui-même : seul l'OCR
+    (captures d'écran) a besoin de ffmpeg."""
+    need_whisper = settings.transcribe == "auto" and not has_transcript and transcribe.is_available()
+    do_ocr = settings.ocr and not has_ocr and ocr.is_available() and ffmpeg_available()
+    return need_whisper, do_ocr
+
+
+def _download_video(client: TikTokPageClient, vid: str, play_url: str, work: Path) -> Path:
+    """Lien direct de la page d'abord (une seule requête, avec les cookies déjà obtenus) ;
+    yt-dlp seulement si ce lien manque ou a expiré (il relit toute la page, c'est plus lent)."""
+    if play_url:
+        work.mkdir(parents=True, exist_ok=True)
+        dest = work / f"{vid}.mp4"
+        try:
+            client.download(play_url, dest, max_bytes=300 * 1024 * 1024, expect="video/")
+            if _ok_file(dest):
+                return dest
+        except Blocked:
+            raise
+        except Exception as e:  # noqa: BLE001 - lien expiré, refusé… : repli yt-dlp
+            log.info("lien direct inutilisable pour %s (%s), repli yt-dlp", vid, e)
+    return enrich.download_video(vid, work)
+
+
+def _media_work(settings: Settings, client: TikTokPageClient, vid: str, play_url: str,
+                need_whisper: bool, do_ocr: bool) -> tuple[list[dict], list[str], bool]:
+    """Télécharge la vidéo puis transcrit / fait l'OCR. → (segments, avertissements, vidéo gardée ?)."""
+    segments: list[dict] = []
+    warnings: list[str] = []
+    local_video = settings.media_dir / vid / "video.mp4"
+    if not (need_whisper or do_ocr or (settings.keep_video and not _ok_file(local_video))):
+        return segments, warnings, _ok_file(local_video)
+    work = settings.tmp_dir / vid
+    try:
+        video_path = local_video if _ok_file(local_video) else _download_video(client, vid, play_url, work)
+        if need_whisper:
+            try:
+                with _whisper_lock:
+                    segs = transcribe.transcribe_segments(video_path, settings.whisper_model,
+                                                          settings.whisper_lang, settings.whisper_threads)
+                segments += [{"kind": "transcript", **s} for s in segs]
+            except Exception as e:  # noqa: BLE001
+                warnings.append(f"transcription échouée : {e}"[:120])
+                log.warning("transcription échouée pour %s : %s", vid, e)
+        if do_ocr:
+            try:
+                shots = screens.smart_screens(video_path, max_screens=60, work_dir=work)
+                segments += ocr_screens(shots, settings.ocr_lang)
+            except Exception as e:  # noqa: BLE001
+                warnings.append(f"OCR échoué : {e}"[:120])
+                log.warning("OCR échoué pour %s : %s", vid, e)
+        if settings.keep_video and video_path != local_video:
+            local_video.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(video_path), local_video)
+    except (VideoUnavailable, Blocked):
+        raise
+    except Exception as e:  # noqa: BLE001
+        warnings.append(f"vidéo non téléchargée : {e}"[:120])
+        log.warning("téléchargement échoué pour %s : %s", vid, e)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return segments, warnings, _ok_file(local_video)
+
+
+def _text_fields(segments: list[dict]) -> dict:
+    return {
+        "transcript": " ".join(s["text"] for s in segments if s["kind"] == "transcript"),
+        "ocr_text": " | ".join((f"[p.{s['page']}] " if s.get("page") else "") + s["text"]
+                               for s in segments if s["kind"] == "ocr" and s["text"]),
+    }
+
+
+def process_video(db: Database, settings: Settings, video: dict, client: TikTokPageClient,
+                  defer_media: bool = False, play_urls: dict[str, str] | None = None) -> str:
+    """Indexe une vidéo. Renvoie le statut final ; lève ``Blocked`` si TikTok bloque.
+
+    Avec ``defer_media``, s'arrête après la page (légende, hashtags, sous-titres, images) : la
+    vidéo est tout de suite cherchable, et la transcription Whisper / l'OCR sont marqués à faire
+    (``media_pending``) pour la 2e passe, ``process_media``."""
     vid = video["id"]
     warnings: list[str] = []
     try:
@@ -113,6 +191,7 @@ def process_video(db: Database, settings: Settings, video: dict, client: TikTokP
             "hashtags": " ".join(f"#{t}" for t in meta.hashtags),
             "thumbnail": meta.thumbnail,
             "duration": meta.duration,
+            "media_pending": 0,
         }
 
         # Miniature en local : les URL du CDN TikTok expirent au bout de quelques heures.
@@ -153,52 +232,21 @@ def process_video(db: Database, settings: Settings, video: dict, client: TikTokP
                         log.info("OCR page %s de %s : %s", i, vid, e)
             fields["images"] = images
         else:
-            need_whisper = (settings.transcribe == "auto" and not meta.subtitle_segments
-                            and transcribe.is_available())
-            if (need_whisper or do_ocr) and not ffmpeg_available():
-                warnings.append("ffmpeg absent : transcription/OCR ignorés")
-                need_whisper = do_ocr = False
-            local_video = media / "video.mp4"
-            if need_whisper or do_ocr or (settings.keep_video and not _ok_file(local_video)):
-                work = settings.tmp_dir / vid
-                try:
-                    if _ok_file(local_video):
-                        video_path = local_video
-                    else:
-                        video_path = enrich.download_video(vid, work)
-                    if need_whisper:
-                        try:
-                            audio = enrich.extract_audio(video_path, work)
-                            with _whisper_lock:
-                                segs = transcribe.transcribe_segments(audio, settings.whisper_model)
-                            segments += [{"kind": "transcript", **s} for s in segs]
-                        except Exception as e:  # noqa: BLE001
-                            warnings.append(f"transcription échouée : {e}"[:120])
-                            log.warning("transcription échouée pour %s : %s", vid, e)
-                    if do_ocr:
-                        try:
-                            shots = screens.smart_screens(video_path, max_screens=60, work_dir=work)
-                            segments += ocr_screens(shots, settings.ocr_lang)
-                        except Exception as e:  # noqa: BLE001
-                            warnings.append(f"OCR échoué : {e}"[:120])
-                            log.warning("OCR échoué pour %s : %s", vid, e)
-                    if settings.keep_video and video_path != local_video:
-                        shutil.move(str(video_path), local_video)
-                except (VideoUnavailable, Blocked):
-                    raise
-                except Exception as e:  # noqa: BLE001
-                    warnings.append(f"vidéo non téléchargée : {e}"[:120])
-                    log.warning("téléchargement échoué pour %s : %s", vid, e)
-                finally:
-                    shutil.rmtree(work, ignore_errors=True)
-            if _ok_file(local_video):
-                fields["media_path"] = media_url(settings, local_video)
+            need_whisper, do_ocr_video = _media_needs(settings, bool(meta.subtitle_segments), False)
+            if do_ocr and not ffmpeg_available():
+                warnings.append("ffmpeg absent : OCR ignoré")
+            if defer_media and (need_whisper or do_ocr_video or settings.keep_video):
+                fields["media_pending"] = 1
+                if play_urls is not None and meta.play_url:
+                    play_urls[vid] = meta.play_url
+            else:
+                segs, warns, _kept = _media_work(settings, client, vid, meta.play_url, need_whisper, do_ocr_video)
+                segments += segs
+                warnings += warns
+            if _ok_file(media / "video.mp4"):
+                fields["media_path"] = media_url(settings, media / "video.mp4")
 
-        fields["transcript"] = " ".join(s["text"] for s in segments if s["kind"] == "transcript")
-        fields["ocr_text"] = " | ".join(
-            (f"[p.{s['page']}] " if s.get("page") else "") + s["text"]
-            for s in segments if s["kind"] == "ocr" and s["text"]
-        )
+        fields.update(_text_fields(segments))
         new_segments: list[dict] | None = segments
         if degraded:
             # Données partielles : ne jamais écraser ce qui était déjà indexé par du vide.
@@ -219,19 +267,64 @@ def process_video(db: Database, settings: Settings, video: dict, client: TikTokP
         return "error"
 
 
+def process_media(db: Database, settings: Settings, video: dict, client: TikTokPageClient,
+                  play_url: str = "") -> str:
+    """2e passe : transcription Whisper / OCR d'une vidéo déjà indexée. Ne touche pas à la légende ;
+    ajoute les nouveaux segments à ceux déjà présents (sous-titres, etc.)."""
+    vid = video["id"]
+    try:
+        old = [{k: s[k] for k in ("kind", "start", "end", "page", "text")} for s in db.get_segments(vid)]
+        need_whisper, do_ocr = _media_needs(settings, any(s["kind"] == "transcript" for s in old),
+                                            any(s["kind"] == "ocr" for s in old))
+        segs, warnings, kept = _media_work(settings, client, vid, play_url, need_whisper, do_ocr)
+    except Blocked:
+        raise
+    except Exception as e:  # noqa: BLE001 - la vidéo reste cherchable par sa légende
+        log.exception("transcription/OCR impossible pour %s", vid)
+        db.save_video(vid, media_pending=0, error=f"{video.get('error') or ''} · {e}".strip(" ·")[:500])
+        return "error"
+    segments = old + segs
+    fields = {"media_pending": 0, **_text_fields(segments)}
+    if kept:
+        fields["media_path"] = media_url(settings, settings.media_dir / vid / "video.mp4")
+    if warnings:
+        fields["error"] = " · ".join([e for e in [video.get("error") or ""] if e] + warnings)[:500]
+    db.save_video(vid, segments=segments, **fields)
+    return "done"
+
+
 @dataclass
 class Job:
     running: bool = False
     done: int = 0
     total: int = 0
     current: str = ""
+    phase: str = ""      # "" | "index" (légendes, sous-titres) | "media" (transcription, OCR)
     message: str = ""
     cancel: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def as_dict(self) -> dict:
         return {"running": self.running, "done": self.done, "total": self.total,
-                "current": self.current, "message": self.message}
+                "current": self.current, "phase": self.phase, "message": self.message}
+
+
+class Throttle:
+    """Espace les requêtes vers les pages TikTok, tous fils confondus (anti-blocage). Remplace
+    l'ancienne pause fixe après chaque vidéo, qui faisait aussi attendre après une transcription."""
+
+    def __init__(self, interval: float):
+        self.interval, self._next, self._lock = max(0.0, interval), 0.0, threading.Lock()
+
+    def wait(self) -> None:
+        if not self.interval:
+            return
+        with self._lock:
+            now = time.monotonic()
+            at = max(now, self._next)
+            self._next = at + self.interval
+        if at > now:
+            time.sleep(at - now)
 
 
 def clean_tmp(settings: Settings) -> None:
@@ -241,6 +334,9 @@ def clean_tmp(settings: Settings) -> None:
             shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
     for p in settings.media_dir.glob("*/*.part"):
         p.unlink(missing_ok=True)
+
+
+MEDIA_CHUNK = 8  # vidéos transcrites entre deux vérifications des nouveaux favoris
 
 
 def process_all(
@@ -253,19 +349,36 @@ def process_all(
     client_factory: Callable[[], TikTokPageClient] = TikTokPageClient,
     max_block_pauses: int = 4,
 ) -> int:
+    """Indexe en deux passes :
+    1. toutes les vidéos en attente, page seulement (rapide, réseau, en parallèle) → cherchables tout de suite ;
+    2. transcription / OCR de celles qui en ont besoin, par petits paquets ; entre deux paquets,
+       les favoris arrivés entre-temps repassent devant.
+    Renvoie le nombre de vidéos indexées (1re passe)."""
     job = job or Job()
-    job.running, job.done, job.total, job.cancel, job.message = True, 0, 0, False, ""
+    job.running, job.done, job.total, job.cancel, job.message, job.phase = True, 0, 0, False, "", ""
     state_lock = threading.Lock()
     blocked = threading.Event()
+    throttle = Throttle(settings.request_delay / max(1, settings.workers))
+    play_urls: dict[str, str] = {}
     pauses = 0
+    indexed = 0
 
-    def work(video: dict) -> None:
-        nonlocal pauses
+    def index_one(video: dict) -> str:
+        throttle.wait()
+        return process_video(db, settings, video, client, defer_media=True, play_urls=play_urls)
+
+    def media_one(video: dict) -> str:
+        if not play_urls.get(video["id"]):
+            throttle.wait()  # repli yt-dlp probable : il relit la page TikTok
+        return process_media(db, settings, video, client, play_urls.pop(video["id"], ""))
+
+    def work(video: dict, fn: Callable[[dict], str]) -> None:
+        nonlocal pauses, indexed
         while not job.cancel:
             if blocked.is_set():
                 return
             try:
-                status = process_video(db, settings, video, client)
+                status = fn(video)
             except Blocked as e:
                 with state_lock:
                     pauses += 1
@@ -283,36 +396,54 @@ def process_all(
                 continue
             with state_lock:
                 job.done += 1
+                if fn is index_one:
+                    indexed += 1
                 if not blocked.is_set() and job.message.startswith("TikTok limite"):
                     job.message = ""
                 done = job.done
             if on_progress:
                 on_progress(done, job.total, video, status)
-            if settings.request_delay:
-                time.sleep(settings.request_delay)
             return
+
+    def run_batch(batch: list[dict], fn: Callable[[dict], str]) -> None:
+        with ThreadPoolExecutor(max_workers=settings.workers, thread_name_prefix="index") as pool:
+            list(pool.map(lambda v: work(v, fn), batch))
+
+    def set_phase(phase: str, total: int) -> None:
+        if job.phase != phase:
+            job.phase, job.done, job.total = phase, 0, 0
+        job.total += total
 
     client = None
     try:
         clean_tmp(settings)
         client = client_factory()
         seen: set[str] = set()
-        # On reboucle tant que des vidéos arrivent (import pendant l'indexation).
+        seen_media: set[str] = set()
         while not job.cancel and not blocked.is_set():
-            batch = [v for v in db.videos_to_process(retry_errors=retry_errors and not seen, limit=limit)
-                     if v["id"] not in seen]
-            if not batch:
+            # 1re passe : priorité aux vidéos pas encore indexées (y compris importées pendant ce temps).
+            if not (limit and seen):
+                batch = [v for v in db.videos_to_process(retry_errors=retry_errors and not seen, limit=limit)
+                         if v["id"] not in seen]
+                if batch:
+                    seen.update(v["id"] for v in batch)
+                    set_phase("index", len(batch))
+                    run_batch(batch, index_one)
+                    continue
+            # 2e passe : transcription / OCR, par petits paquets.
+            pending = [v for v in db.videos_media_pending() if v["id"] not in seen_media
+                       and (not limit or v["id"] in seen)]
+            if not pending:
                 break
-            seen.update(v["id"] for v in batch)
-            job.total += len(batch)
-            with ThreadPoolExecutor(max_workers=settings.workers, thread_name_prefix="index") as pool:
-                list(pool.map(work, batch))
-            if limit:
-                break
+            if job.phase != "media":
+                set_phase("media", len(pending))
+            chunk = pending[:MEDIA_CHUNK]
+            seen_media.update(v["id"] for v in chunk)
+            run_batch(chunk, media_one)
     finally:
         if client is not None:
             client.close()
         if job.cancel and not job.message:
             job.message = "Indexation arrêtée."
-        job.running, job.current = False, ""
-    return job.done
+        job.running, job.current, job.phase = False, "", ""
+    return indexed

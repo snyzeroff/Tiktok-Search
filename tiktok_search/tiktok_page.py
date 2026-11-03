@@ -54,6 +54,7 @@ class PageItem:
     duration: float | None = None
     image_urls: list[str] = field(default_factory=list)
     subtitles: list[dict] = field(default_factory=list)   # [{lang, url, format, source}]
+    play_url: str = ""                        # lien direct du MP4 (expire en quelques heures)
 
 
 def _first(urls) -> str:
@@ -126,6 +127,14 @@ def parse_item_struct(item: dict, video_id: str) -> PageItem:
         for s in _dicts(video.get("subtitleInfos"))
         if s.get("Url")
     ]
+    play_url = video.get("playAddr") or video.get("downloadAddr") or ""
+    if not isinstance(play_url, str) or not play_url.startswith("http"):
+        play_url = ""
+    for b in _dicts(video.get("bitrateInfo")):
+        if play_url:
+            break
+        addr = b.get("PlayAddr") if isinstance(b.get("PlayAddr"), dict) else {}
+        play_url = _first(addr.get("UrlList")) or ""
     cover = video.get("cover") or video.get("originCover") or ""
     if not cover and images:
         cover = images[0]
@@ -139,6 +148,7 @@ def parse_item_struct(item: dict, video_id: str) -> PageItem:
         duration=_float(video.get("duration")) if not images else None,
         image_urls=images,
         subtitles=subtitles,
+        play_url="" if images else play_url,
     )
 
 

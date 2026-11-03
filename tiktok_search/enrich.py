@@ -35,10 +35,12 @@ class VideoMeta:
     image_urls: list[str] = field(default_factory=list)
     subtitle_segments: list[dict] = field(default_factory=list)  # [{start, end, text}]
     source: str = "page"  # page | ytdlp | oembed (les deux derniers sont des replis dégradés)
+    play_url: str = ""    # lien direct du MP4, s'il est dans la page
 
     @classmethod
     def from_page(cls, p: PageItem) -> "VideoMeta":
-        return cls(p.video_id, p.kind, p.author, p.description, p.hashtags, p.cover, p.duration, p.image_urls)
+        return cls(p.video_id, p.kind, p.author, p.description, p.hashtags, p.cover, p.duration, p.image_urls,
+                   play_url=p.play_url)
 
 
 # --- sous-titres --------------------------------------------------------------
@@ -168,12 +170,3 @@ def run_ffmpeg(args: list[str], timeout: int = 900) -> None:
         raise RuntimeError("ffmpeg n'est pas installé") from e
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"ffmpeg : {e.stderr.decode(errors='ignore')[-300:]}") from e
-
-
-def extract_audio(video_path: Path, out_dir: Path | None = None) -> Path:
-    """WAV mono 16 kHz, le format attendu par Whisper (écrit hors du dossier media)."""
-    out_dir = out_dir or video_path.parent
-    out_dir.mkdir(parents=True, exist_ok=True)
-    audio = out_dir / f"{video_path.stem}.wav"
-    run_ffmpeg(["-i", str(video_path), "-vn", "-ac", "1", "-ar", "16000", str(audio)])
-    return audio

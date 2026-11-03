@@ -37,7 +37,8 @@ VIDEO_COLUMNS = {
     "duration": "REAL",
     "favorited_at": "TEXT DEFAULT ''",
     "source": "TEXT DEFAULT ''",
-    "status": "TEXT DEFAULT 'pending'",    # pending | done | error | unavailable (supprimée/privée)
+    "status": "TEXT DEFAULT 'pending'",
+    "media_pending": "INTEGER DEFAULT 0",  # 1 = indexée, transcription/OCR encore à faire    # pending | done | error | unavailable (supprimée/privée)
     "attempts": "INTEGER DEFAULT 0",
     "error": "TEXT DEFAULT ''",
     "updated_at": "REAL",
@@ -231,7 +232,14 @@ class Database:
     def reset_all(self) -> int:
         """Remet toutes les vidéos en attente (pour tout réindexer après une mise à jour)."""
         with self._write_lock, self.connect() as conn:
-            return conn.execute("UPDATE videos SET status = 'pending', error = '', attempts = 0").rowcount
+            return conn.execute(
+                "UPDATE videos SET status = 'pending', error = '', attempts = 0, media_pending = 0").rowcount
+
+    def videos_media_pending(self, limit: int | None = None) -> list[dict]:
+        sql = "SELECT * FROM videos WHERE status = 'done' AND media_pending = 1 ORDER BY favorited_at DESC"
+        with self.connect() as conn:
+            return [_video_dict(r) for r in conn.execute(sql + (" LIMIT ?" if limit else ""),
+                                                         (limit,) if limit else ())]
 
     def mark_failure(self, video_id: str, error: str, permanent: bool = False) -> None:
         with self._write_lock, self.connect() as conn:
@@ -248,6 +256,8 @@ class Database:
                      conn.execute("SELECT kind, COUNT(*) AS n FROM videos GROUP BY kind")}
             with_transcript = conn.execute("SELECT COUNT(*) FROM videos WHERE transcript != ''").fetchone()[0]
             analysed = conn.execute("SELECT COUNT(DISTINCT video_id) FROM analyses").fetchone()[0]
+            media_pending = conn.execute(
+                "SELECT COUNT(*) FROM videos WHERE status = 'done' AND media_pending = 1").fetchone()[0]
         return {
             "total": sum(counts.values()),
             "pending": counts.get("pending", 0),
@@ -258,6 +268,7 @@ class Database:
             "carousels": kinds.get("photo", 0),
             "with_transcript": with_transcript,
             "analysed": analysed,
+            "media_pending": media_pending,
         }
 
     # --- analyses -----------------------------------------------------------

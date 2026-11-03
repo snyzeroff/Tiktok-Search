@@ -438,16 +438,17 @@ async function refresh() {
   }
   const s = r.stats, j = r.job, f = r.features;
   const pct = Math.round(100 * j.done / Math.max(1, j.total));
-  $("#statusBtn").className = "status" + (j.running || r.account.running ? " busy" : (s.error || (!f.ffmpeg && (f.whisper || f.ocr)) ? " warn" : ""));
-  $("#statusText").textContent = j.running ? `Indexation ${j.done}/${j.total}` : r.account.running ? "Synchro des favoris…" : plural(s.total, "favori");
+  $("#statusBtn").className = "status" + (j.running || r.account.running ? " busy" : (s.error || (!f.ffmpeg && f.ocr) ? " warn" : ""));
+  const phaseLabel = j.phase === "media" ? "Transcription" : "Indexation";
+  $("#statusText").textContent = j.running ? `${phaseLabel} ${j.done}/${j.total}` : r.account.running ? "Synchro des favoris…" : plural(s.total, "favori");
   $("#stats").innerHTML = `<div class="stat-grid">
       <div><b>${s.total}</b><span>favoris</span></div><div><b>${s.done}</b><span>indexés</span></div><div><b>${s.analysed}</b><span>analysés</span></div>
       <div><b>${s.videos}</b><span>vidéos</span></div><div><b>${s.carousels}</b><span>carrousels</span></div><div><b>${s.with_transcript}</b><span>transcrits</span></div>
     </div>
-    <p class="small muted" style="margin:6px 0 0">${s.pending ? `${s.pending} en attente. ` : ""}${s.error ? `${s.error} en échec. ` : ""}${s.unavailable ? `${s.unavailable} supprimés ou privés.` : ""}</p>`;
+    <p class="small muted" style="margin:6px 0 0">${s.pending ? `${s.pending} en attente. ` : ""}${s.media_pending ? `${s.media_pending} transcriptions à faire (déjà cherchables par la légende). ` : ""}${s.error ? `${s.error} en échec. ` : ""}${s.unavailable ? `${s.unavailable} supprimés ou privés.` : ""}</p>`;
   $("#progressbar").hidden = !j.running;
   $("#progressbar div").style.width = pct + "%";
-  $("#jobline").innerHTML = (j.running ? `Indexation en cours, ${pct} %. <button class="btn bare" id="cancelJob" type="button">Arrêter</button> ` : "") + esc(j.message);
+  $("#jobline").innerHTML = (j.running ? `${j.phase === "media" ? "Transcription des vidéos sans sous-titres" : "Indexation des légendes et sous-titres"}, ${pct} %. <button class="btn bare" id="cancelJob" type="button">Arrêter</button> ` : "") + esc(j.message);
   $("#cancelJob")?.addEventListener("click", () => post("/api/process/cancel"));
   const yes = (on, label, off) => `<span class="${on ? "on" : "off"}">${on ? label : off}</span>`;
   $("#features").innerHTML = `
