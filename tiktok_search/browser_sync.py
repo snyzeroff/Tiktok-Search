@@ -9,15 +9,26 @@ Principe :
    (``/api/user/collect/item_list/``). Aucune requête « inventée » : on ne fait que regarder
    ce que le site charge pour afficher tes favoris.
 
+Pour des milliers de favoris, une fois la 1re page chargée par la page elle-même, les suivantes
+sont demandées directement depuis la page (même session, même signature que le site), sans faire
+défiler ni afficher des milliers de miniatures. Si TikTok refuse, on revient au défilement.
+Chaque page est enregistrée dès qu'elle arrive, et une 1re synchro interrompue reprend où elle
+s'était arrêtée.
+
 La synchro est incrémentale : TikTok renvoie les favoris du plus récent au plus ancien, donc
 après une première synchro complète on s'arrête dès qu'une page ne contient plus rien de nouveau.
+
+Les données de chaque favori (légende, sous-titres, miniature, lien vidéo) sont aussi gardées de
+côté pour l'indexation, qui n'a alors plus besoin d'ouvrir la page de chaque vidéo.
 """
 
 from __future__ import annotations
 
+import json
 import logging
-import re
 import os
+import random
+import re
 import shutil
 import sys
 import threading
@@ -43,6 +54,7 @@ KV_USERNAME = "browser_username"
 KV_LAST_SYNC = "browser_last_sync"
 KV_FULL_DONE = "browser_full_sync_done"
 KV_SESSION = "browser_session"
+KV_RESUME = "browser_resume_cursor"  # où reprendre une 1re synchro complète interrompue
 
 _lock = threading.Lock()  # un seul navigateur à la fois sur le profil
 
@@ -68,6 +80,7 @@ class FavoriteMeta:
     description: str = ""
     hashtags: str = ""
     duration: float | None = None
+    raw: dict = field(default_factory=dict, repr=False)  # données utiles à l'indexation (allégées)
 
 
 @dataclass
@@ -75,9 +88,33 @@ class SyncResult:
     username: str
     favorites: list[FavoriteMeta] = field(default_factory=list)
     complete: bool = False  # True si on est allé jusqu'au bout de la liste
+    added: int = 0          # nouveaux favoris enregistrés (au fil de l'eau)
+    mode: str = ""          # "api" (requêtes directes) ou "scroll" (défilement)
 
 
 # --- lecture des réponses ---------------------------------------------------------
+
+def slim_item(it: dict) -> dict:
+    """Garde seulement ce dont l'indexation a besoin (même forme que la page d'une vidéo)."""
+    video = it.get("video") if isinstance(it.get("video"), dict) else {}
+    out: dict = {k: it[k] for k in ("id", "desc") if k in it}
+    if isinstance(it.get("author"), dict):
+        out["author"] = {"uniqueId": it["author"].get("uniqueId", "")}
+    v = {k: video[k] for k in ("duration", "cover", "originCover", "playAddr", "downloadAddr", "subtitleInfos")
+         if k in video}
+    if video.get("bitrateInfo") and not (v.get("playAddr") or v.get("downloadAddr")):
+        v["bitrateInfo"] = video["bitrateInfo"][:1]
+    out["video"] = v
+    if isinstance(it.get("imagePost"), dict):
+        ip = it["imagePost"]
+        out["imagePost"] = {"title": ip.get("title", ""), "images": [
+            {"imageURL": {"urlList": ((img.get("imageURL") or {}).get("urlList") or [])[:1]}}
+            for img in ip.get("images") or [] if isinstance(img, dict)]}
+    out["textExtra"] = [{"hashtagName": t["hashtagName"]} for t in it.get("textExtra") or []
+                        if isinstance(t, dict) and t.get("hashtagName")]
+    out["challenges"] = [{"title": c["title"]} for c in it.get("challenges") or [] if isinstance(c, dict) and c.get("title")]
+    return out
+
 
 def parse_item_list(payload: dict) -> tuple[list[FavoriteMeta], bool]:
     """Réponse JSON de ``/api/user/collect/item_list/`` → (favoris, reste-t-il des pages)."""
@@ -99,6 +136,7 @@ def parse_item_list(payload: dict) -> tuple[list[FavoriteMeta], bool]:
             item=FavoriteItem(vid, canonical_url(vid, author, kind), "", "favorite"),
             kind=kind, author=author, description=str(it.get("desc") or ""), hashtags=hashtags,
             duration=float(dur) if isinstance(dur, (int, float)) and dur > 0 else None,
+            raw=slim_item(it),
         ))
     return out, bool(payload.get("hasMore"))
 
@@ -223,9 +261,37 @@ def _open_profile_favorites(page, base: str, names: list[str], wait_captcha: Cal
                     + ". Si ce n'est pas ton profil, renseigne TTS_TIKTOK_USERNAME dans .env.")
 
 
+# Demande une page de favoris depuis la page TikTok elle-même : mêmes cookies, et le script de
+# sécurité de TikTok signe la requête comme pour le site. Si ça ne passe pas sans signature
+# explicite, on essaie la fonction de signature du site (byted_acrawler.frontierSign).
+_API_PAGE_JS = """async ([tpl, cursor, sign]) => {
+  const u = new URL(tpl, location.origin);
+  u.searchParams.set('cursor', String(cursor));
+  for (const k of ['X-Bogus', 'X-Gnarly', '_signature']) u.searchParams.delete(k);
+  let url = u.toString();
+  if (sign) {
+    try {
+      const s = window.byted_acrawler && window.byted_acrawler.frontierSign(u.search.slice(1));
+      if (s && s['X-Bogus']) url += '&X-Bogus=' + encodeURIComponent(s['X-Bogus']);
+    } catch (e) {}
+  }
+  try {
+    const r = await fetch(url, {credentials: 'include'});
+    return JSON.parse(await r.text());
+  } catch (e) { return null; }
+}"""
+
+
+def _valid_page(payload) -> bool:
+    return (isinstance(payload, dict) and payload.get("statusCode", 0) in (0, None)
+            and (isinstance(payload.get("itemList"), list) or payload.get("hasMore") is False))
+
+
 def _collect(page, base: str, names: list[str], known: set[str], stop_on_known: bool,
              progress: Callable[[str], None], max_minutes: float, interactive: bool,
-             on_username: Callable[[str], None]) -> SyncResult:
+             on_username: Callable[[str], None],
+             on_page: Callable[[list[FavoriteMeta], object], int] = lambda favs, cur: 0,
+             resume_cursor: object = None, pace: tuple[float, float] = (0.4, 1.0)) -> SyncResult:
     responses: list = []
     page.on("response", lambda r: responses.append(r) if FAVORITES_API in r.url else None)
 
@@ -244,8 +310,70 @@ def _collect(page, base: str, names: list[str], known: set[str], stop_on_known: 
     result = SyncResult(username)
     seen: set[str] = set()
     deadline = time.monotonic() + max_minutes * 60
+
+    def handle(payload: dict) -> bool:
+        """Enregistre une page ; True s'il faut s'arrêter (fin de liste, ou plus rien de nouveau)."""
+        items, has_more = parse_item_list(payload)
+        new = [f for f in items if f.item.video_id not in seen]
+        seen.update(f.item.video_id for f in new)
+        result.favorites.extend(new)
+        result.added += on_page(new, payload.get("cursor") if has_more else None)
+        progress(f"{len(result.favorites)} favoris lus, {result.added} nouveaux…")
+        if not has_more:
+            result.complete = True
+            return True
+        return bool(stop_on_known and items and all(f.item.video_id in known for f in items))
+
+    # 1re page : celle que charge la page TikTok quand on clique sur l'onglet.
+    first = None
+    for _ in range(15):
+        page.wait_for_timeout(1000)
+        for resp in responses:
+            try:
+                payload = resp.json()
+            except Exception:  # noqa: BLE001
+                continue
+            if _valid_page(payload):
+                first = (resp.url, payload)
+                break
+        if first:
+            break
+        if _has_captcha(page):
+            raise Blocked("TikTok demande une vérification (captcha).")
+    if not first:
+        raise Blocked("TikTok n'a renvoyé aucun favori (liste vide, ou page bloquée).")
+    responses.clear()
+    template, payload = first
+    if handle(payload):
+        return result
+
+    # Pages suivantes : requêtes directes (rapide, rien à afficher).
+    cursor = resume_cursor if (resume_cursor not in (None, "") and not stop_on_known) else payload.get("cursor")
+    if cursor != payload.get("cursor"):
+        progress("Reprise de la synchro précédente…")
+    sign = False
+    while time.monotonic() < deadline:
+        nxt = page.evaluate(_API_PAGE_JS, [template, cursor, sign])
+        if not _valid_page(nxt) and not sign:
+            sign = True  # 2e essai avec la signature explicite du site
+            nxt = page.evaluate(_API_PAGE_JS, [template, cursor, sign])
+        if not _valid_page(nxt):
+            log.info("requêtes directes refusées (%s), repli sur le défilement", str(nxt)[:200])
+            break
+        result.mode = "api"
+        if handle(nxt):
+            return result
+        cursor = nxt.get("cursor")
+        page.wait_for_timeout(int(random.uniform(*pace) * 1000))
+    else:
+        return result  # temps écoulé : la suite reprendra à la prochaine synchro
+
+    # Repli : on fait défiler la page et on lit ce qu'elle charge.
+    result.mode = "scroll"
     idle = 0
     while time.monotonic() < deadline:
+        page.mouse.wheel(0, 5000)
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         page.wait_for_timeout(1500)
         batch, responses[:] = responses[:], []
         got_page = False
@@ -254,29 +382,19 @@ def _collect(page, base: str, names: list[str], known: set[str], stop_on_known: 
                 payload = resp.json()
             except Exception:  # noqa: BLE001 - réponse vide ou annulée
                 continue
+            if not _valid_page(payload):
+                continue
             got_page = True
-            items, has_more = parse_item_list(payload)
-            new = [f for f in items if f.item.video_id not in seen]
-            seen.update(f.item.video_id for f in new)
-            result.favorites.extend(new)
-            progress(f"{len(result.favorites)} favoris lus…")
-            if not has_more:
-                result.complete = True
+            if handle(payload):
                 return result
-            if stop_on_known and items and all(f.item.video_id in known for f in items):
-                return result  # tout le reste est déjà connu
         if got_page:
             idle = 0
-        else:
-            idle += 1
-            if _has_captcha(page):
-                raise Blocked("TikTok demande une vérification (captcha).")
-            if idle >= 8:  # ~15 s sans nouvelle page : fin de liste ou page bloquée
-                if not result.favorites and not seen:
-                    raise Blocked("TikTok n'a renvoyé aucun favori (liste vide, ou page bloquée).")
-                return result
-        page.mouse.wheel(0, 5000)
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            continue
+        idle += 1
+        if _has_captcha(page):
+            raise Blocked("TikTok demande une vérification (captcha).")
+        if idle >= 8:  # ~15 s sans nouvelle page : fin de liste ou page bloquée
+            return result
     return result
 
 
@@ -292,9 +410,11 @@ def _debug_shot(page, debug_dir: Path | None) -> None:
 
 def run(*, profile: Path, known: set[str], stop_on_known: bool, username: str = "", login: bool = False,
         headless: bool = True, channel: str = "auto", base: str = TIKTOK, login_timeout: float = 300,
-        max_minutes: float = 20, progress: Callable[[str], None] = lambda m: None,
+        max_minutes: float = 90, progress: Callable[[str], None] = lambda m: None,
         debug_dir: Path | None = None, on_username: Callable[[str], None] = lambda n: None,
-        on_session: Callable[[bool], None] = lambda ok: None) -> SyncResult:
+        on_session: Callable[[bool], None] = lambda ok: None,
+        on_page: Callable[[list[FavoriteMeta], object], int] = lambda favs, cur: 0,
+        resume_cursor: object = None, pace: tuple[float, float] = (0.4, 1.0)) -> SyncResult:
     """Ouvre le navigateur, (connexion si ``login``), puis lit les favoris."""
     if not is_available():
         raise SyncError("Playwright n'est pas installé : pip install playwright")
@@ -329,7 +449,8 @@ def run(*, profile: Path, known: set[str], stop_on_known: bool, username: str = 
                 names = [username] if username else []  # @ forcé dans .env, ou trouvé la dernière fois
                 names += _username_candidates(page)
                 return _collect(page, base, names, known, stop_on_known, progress, max_minutes,
-                                interactive=not headless or login, on_username=on_username)
+                                interactive=not headless or login, on_username=on_username,
+                                on_page=on_page, resume_cursor=resume_cursor, pace=pace)
             except Exception:
                 _debug_shot(page, debug_dir)
                 raise
@@ -345,24 +466,50 @@ def forget_session(profile: Path) -> None:
 
 # --- intégration à la base ------------------------------------------------------------
 
+class PageStore:
+    """Enregistre les favoris page par page, dans l'ordre de TikTok (le plus récent d'abord)."""
+
+    def __init__(self, db, now: float | None = None, track_resume: bool = False):
+        self.db, self.now, self.index, self.track_resume = db, now or time.time(), 0, track_resume
+
+    def __call__(self, favs: list[FavoriteMeta], next_cursor: object = None) -> int:
+        added = 0
+        cache = []
+        pending = self.db.ids_with_status([f.item.video_id for f in favs], "pending")
+        for fav in favs:
+            # TikTok ne donne pas la date de mise en favori : on garde l'ordre de la liste.
+            date = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(self.now - self.index))
+            self.index += 1
+            vid = fav.item.video_id
+            if self.db.add_favorite(vid, fav.item.url, date, "browser:favorite", fav.kind):
+                added += 1
+                fields = {k: v for k, v in (("author", fav.author), ("description", fav.description),
+                                            ("hashtags", fav.hashtags), ("duration", fav.duration)) if v}
+                if fields:
+                    self.db.save_video(vid, **fields)
+                pending.add(vid)
+            if vid in pending and fav.raw:
+                cache.append((vid, json.dumps(fav.raw, ensure_ascii=False)))
+        if cache:
+            self.db.cache_put(cache, self.now)
+        if self.track_resume and next_cursor not in (None, ""):
+            self.db.kv_set(KV_RESUME, json.dumps(next_cursor))
+        return added
+
+
 def store(db, result: SyncResult, now: float | None = None) -> int:
-    """Ajoute les nouveaux favoris (dans l'ordre de TikTok) et pré-remplit légende/auteur."""
-    now = now or time.time()
-    added = 0
-    for i, fav in enumerate(result.favorites):
-        # TikTok ne donne pas la date de mise en favori : on garde l'ordre de la liste.
-        date = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(now - i))
-        if db.add_favorite(fav.item.video_id, fav.item.url, date, "browser:favorite", fav.kind):
-            added += 1
-            fields = {k: v for k, v in (("author", fav.author), ("description", fav.description),
-                                        ("hashtags", fav.hashtags), ("duration", fav.duration)) if v}
-            if fields:
-                db.save_video(fav.item.video_id, **fields)
+    """Enregistre un résultat complet d'un coup (tests, imports)."""
+    added = PageStore(db, now)(result.favorites)
+    finish(db, result, now)
+    return added
+
+
+def finish(db, result: SyncResult, now: float | None = None) -> None:
     db.kv_set(KV_USERNAME, result.username)
-    db.kv_set(KV_LAST_SYNC, str(now))
+    db.kv_set(KV_LAST_SYNC, str(now or time.time()))
     if result.complete:
         db.kv_set(KV_FULL_DONE, "1")
-    return added
+        db.kv_delete(KV_RESUME)
 
 
 def known_ids(db) -> set[str]:
@@ -381,19 +528,31 @@ def account_state(db, profile: Path) -> dict:
 
 
 def sync_into_db(db, settings, *, login: bool = False, full: bool = False,
-                 progress: Callable[[str], None] = lambda m: None, base: str = TIKTOK) -> dict:
-    """Connexion éventuelle + lecture des favoris + enregistrement. Renvoie un résumé.
+                 progress: Callable[[str], None] = lambda m: None, base: str = TIKTOK,
+                 pace: tuple[float, float] = (0.4, 1.0), on_added: Callable[[int], None] = lambda n: None) -> dict:
+    """Connexion éventuelle + lecture des favoris, enregistrés au fil de l'eau. Renvoie un résumé.
 
     Sans fenêtre d'abord ; si TikTok demande une vérification (captcha), on recommence avec
     une fenêtre visible pour que tu puisses la résoudre."""
     profile = default_profile_dir()
-    known = known_ids(db)
-    stop_on_known = not full and db.kv_get(KV_FULL_DONE) == "1"
-    opts = dict(profile=profile, known=known, stop_on_known=stop_on_known,
+    full_done = db.kv_get(KV_FULL_DONE) == "1"
+    if full:
+        db.kv_delete(KV_RESUME)
+    stop_on_known = not full and full_done
+    resume = db.kv_get(KV_RESUME) if not full_done else None
+    store_page = PageStore(db, track_resume=not stop_on_known)
+
+    def sink(favs: list[FavoriteMeta], next_cursor: object = None) -> int:
+        added = store_page(favs, next_cursor)
+        if added:
+            on_added(added)  # l'indexation peut démarrer sans attendre la fin de la synchro
+        return added
+    opts = dict(profile=profile, known=known_ids(db), stop_on_known=stop_on_known,
                 username=settings.tiktok_username or db.kv_get(KV_USERNAME) or "", channel=settings.browser,
                 base=base, progress=progress, debug_dir=settings.tmp_dir,
                 on_username=lambda n: db.kv_set(KV_USERNAME, n),
-                on_session=lambda ok: db.kv_set(KV_SESSION, "1") if ok else db.kv_delete(KV_SESSION))
+                on_session=lambda ok: db.kv_set(KV_SESSION, "1") if ok else db.kv_delete(KV_SESSION),
+                on_page=sink, resume_cursor=json.loads(resume) if resume else None, pace=pace)
     headless = settings.browser_headless and not login
     try:
         result = run(login=login, headless=headless, **opts)
@@ -402,6 +561,6 @@ def sync_into_db(db, settings, *, login: bool = False, full: bool = False,
             raise
         progress("TikTok demande une vérification : une fenêtre s'ouvre.")
         result = run(login=False, headless=False, **opts)
-    added = store(db, result)
-    return {"username": result.username, "found": len(result.favorites), "added": added,
-            "complete": result.complete}
+    finish(db, result)
+    return {"username": result.username, "found": len(result.favorites), "added": result.added,
+            "complete": result.complete, "mode": result.mode}

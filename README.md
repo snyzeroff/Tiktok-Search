@@ -198,6 +198,23 @@ Pour aller plus vite :
 - `TTS_WORKERS` (fils en parallèle) et `TTS_REQUEST_DELAY` (espacement des pages TikTok) règlent la 1re passe :
   plus vite = plus de risque de blocage temporaire par TikTok.
 
+### Gros volumes (10 000+ favoris)
+
+- **Synchro** : après la 1re page, les suivantes sont demandées directement depuis la page TikTok
+  (≈ 1 s par page de 30, soit une dizaine de minutes pour 15 000 favoris), sans faire défiler des
+  milliers de miniatures. Chaque page est enregistrée aussitôt, et l'indexation démarre pendant la
+  synchro. Une 1re synchro interrompue **reprend où elle s'était arrêtée**. Si TikTok refuse ces
+  requêtes, retour automatique au défilement.
+- **1re passe** : les données de la liste des favoris (légende, sous-titres, miniature, lien vidéo,
+  images) sont réutilisées, **sans ouvrir la page de chaque vidéo** : seuls les fichiers sont téléchargés
+  depuis le CDN. Mesuré sur 15 800 favoris simulés : 5 s d'enregistrement, 15 s de traitement par l'app
+  (hors téléchargements), recherche en 38 ms.
+- **Whisper** reste l'étape longue. Avec une **carte NVIDIA**, il l'utilise tout seul (`TTS_WHISPER_DEVICE=auto`) :
+  installer les bibliothèques CUDA avec `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`. Sinon, sur CPU,
+  `TTS_WHISPER_MODEL=base` est ≈ 3× plus rapide. Les favoris les plus récents sont transcrits en premier,
+  et tout est cherchable par la légende et les sous-titres TikTok en attendant.
+- Prévoir ≈ 1 Go de disque pour les miniatures de 15 000 favoris (plus les pages des carrousels).
+
 ## Robustesse
 
 - **TikTok qui bloque** (429/403/captcha) : pauses croissantes (30 s → 10 min), puis arrêt propre.

@@ -61,7 +61,8 @@ def _start_account_sync(login: bool = False, full: bool = False) -> bool:
 
     def run() -> None:
         try:
-            r = browser_sync.sync_into_db(db, settings, login=login, full=full, progress=progress)
+            r = browser_sync.sync_into_db(db, settings, login=login, full=full, progress=progress,
+                                          on_added=lambda n: _start_processing())
             account.message = (f"{r['added']} nouveaux favoris importés." if r["added"]
                                else "Tes favoris sont à jour.")
             if r["added"]:

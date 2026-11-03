@@ -72,6 +72,10 @@ CREATE TABLE IF NOT EXISTS analyses (
 );
 
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
+
+-- Données d'une publication lues dans la liste des favoris, en attendant l'indexation
+-- (évite d'ouvrir la page de chaque vidéo ; les liens qu'elles contiennent expirent en quelques heures).
+CREATE TABLE IF NOT EXISTS item_cache (video_id TEXT PRIMARY KEY, data TEXT NOT NULL, fetched_at REAL);
 """
 
 FTS_VERSION = "2"
@@ -314,6 +318,39 @@ class Database:
     def all_ids(self) -> set[str]:
         with self.connect() as conn:
             return {r[0] for r in conn.execute("SELECT id FROM videos")}
+
+    def ids_with_status(self, ids: list[str], status: str) -> set[str]:
+        if not ids:
+            return set()
+        with self.connect() as conn:
+            return {r[0] for r in conn.execute(
+                f"SELECT id FROM videos WHERE status = ? AND id IN ({','.join('?' * len(ids))})", (status, *ids))}
+
+    # --- cache des données de la liste des favoris ----------------------------
+
+    def cache_put(self, rows: list[tuple[str, str]], fetched_at: float) -> None:
+        with self._write_lock, self.connect() as conn:
+            conn.executemany("INSERT OR REPLACE INTO item_cache (video_id, data, fetched_at) VALUES (?, ?, ?)",
+                             [(vid, data, fetched_at) for vid, data in rows])
+
+    def cache_take(self, video_id: str, max_age: float) -> dict | None:
+        """Renvoie (et supprime) les données en cache si elles sont assez récentes."""
+        with self._write_lock, self.connect() as conn:
+            row = conn.execute("SELECT data, fetched_at FROM item_cache WHERE video_id = ?", (video_id,)).fetchone()
+            if row is None:
+                return None
+            conn.execute("DELETE FROM item_cache WHERE video_id = ?", (video_id,))
+        if time.time() - (row["fetched_at"] or 0) > max_age:
+            return None
+        try:
+            data = json.loads(row["data"])
+        except json.JSONDecodeError:
+            return None
+        return data if isinstance(data, dict) else None
+
+    def cache_count(self) -> int:
+        with self.connect() as conn:
+            return conn.execute("SELECT COUNT(*) FROM item_cache").fetchone()[0]
 
 
 def _video_dict(row: sqlite3.Row) -> dict:

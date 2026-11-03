@@ -24,7 +24,7 @@ from .config import Settings
 from .db import Database
 from .enrich import VideoMeta
 from .importer import FavoriteItem, kind_from_url
-from .tiktok_page import Blocked, TikTokPageClient, VideoUnavailable
+from .tiktok_page import Blocked, TikTokPageClient, VideoUnavailable, parse_item_struct
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +42,32 @@ def media_url(settings: Settings, path: Path) -> str:
 
 def ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
+
+
+CACHE_MAX_AGE = 3 * 3600  # les liens (sous-titres, miniature, vidéo) de TikTok expirent après quelques heures
+
+
+def meta_from_cache(client: TikTokPageClient, item: dict, vid: str) -> VideoMeta | None:
+    """Métadonnées depuis la liste des favoris, sans ouvrir la page. ``None`` → il faut la page
+    (vidéo sans info de sous-titres dans la liste, ou lien de sous-titres expiré)."""
+    try:
+        page = parse_item_struct(item, vid)
+    except Exception:  # noqa: BLE001
+        return None
+    video = item.get("video") if isinstance(item.get("video"), dict) else {}
+    if page.kind == "video" and "subtitleInfos" not in video:
+        return None  # on ne sait pas s'il y a des sous-titres : la page le dira
+    if page.kind == "photo" and not page.image_urls:
+        return None
+    meta = VideoMeta.from_page(page)
+    sub = enrich.pick_subtitle(page.subtitles)
+    if sub:
+        try:
+            meta.subtitle_segments = enrich.parse_vtt_segments(client.get_text(sub["url"]))
+        except Exception as e:  # noqa: BLE001 - lien expiré : la page en donnera un neuf
+            log.info("sous-titres en cache inutilisables pour %s : %s", vid, e)
+            return None
+    return meta
 
 
 def fetch_meta(client: TikTokPageClient, vid: str) -> VideoMeta:
@@ -133,8 +159,8 @@ def _media_work(settings: Settings, client: TikTokPageClient, vid: str, play_url
         if need_whisper:
             try:
                 with _whisper_lock:
-                    segs = transcribe.transcribe_segments(video_path, settings.whisper_model,
-                                                          settings.whisper_lang, settings.whisper_threads)
+                    segs = transcribe.transcribe_segments(video_path, settings.whisper_model, settings.whisper_lang,
+                                                          settings.whisper_threads, settings.whisper_device)
                 segments += [{"kind": "transcript", **s} for s in segs]
             except Exception as e:  # noqa: BLE001
                 warnings.append(f"transcription échouée : {e}"[:120])
@@ -177,7 +203,10 @@ def process_video(db: Database, settings: Settings, video: dict, client: TikTokP
     vid = video["id"]
     warnings: list[str] = []
     try:
-        meta = fetch_meta(client, vid)
+        cached = db.cache_take(vid, CACHE_MAX_AGE)
+        meta = meta_from_cache(client, cached, vid) if cached else None
+        if meta is None:
+            meta = fetch_meta(client, vid)
         degraded = meta.source != "page"
         if degraded and video.get("kind") == "photo":
             meta.kind = "photo"  # un repli ne sait pas reconnaître un carrousel : on garde ce qu'on savait
@@ -309,6 +338,20 @@ class Job:
                 "current": self.current, "phase": self.phase, "message": self.message}
 
 
+class _ThrottledClient:
+    """Le client TikTok, avec le limiteur appliqué uniquement aux pages tiktok.com (pas au CDN)."""
+
+    def __init__(self, client: TikTokPageClient, throttle: "Throttle"):
+        self._client, self._throttle = client, throttle
+
+    def fetch(self, vid: str):
+        self._throttle.wait()
+        return self._client.fetch(vid)
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+
 class Throttle:
     """Espace les requêtes vers les pages TikTok, tous fils confondus (anti-blocage). Remplace
     l'ancienne pause fixe après chaque vidéo, qui faisait aussi attendre après une transcription."""
@@ -364,8 +407,9 @@ def process_all(
     indexed = 0
 
     def index_one(video: dict) -> str:
-        throttle.wait()
-        return process_video(db, settings, video, client, defer_media=True, play_urls=play_urls)
+        # Le limiteur ne s'applique qu'aux pages ouvertes : les favoris en cache passent sans attendre.
+        return process_video(db, settings, video, _ThrottledClient(client, throttle),
+                             defer_media=True, play_urls=play_urls)
 
     def media_one(video: dict) -> str:
         if not play_urls.get(video["id"]):
@@ -406,7 +450,10 @@ def process_all(
             return
 
     def run_batch(batch: list[dict], fn: Callable[[dict], str]) -> None:
-        with ThreadPoolExecutor(max_workers=settings.workers, thread_name_prefix="index") as pool:
+        # 1re passe : surtout des téléchargements CDN (miniatures, sous-titres) → plus de fils ;
+        # le rythme des pages tiktok.com reste celui du limiteur.
+        n = min(12, settings.workers * 3) if fn is index_one else settings.workers
+        with ThreadPoolExecutor(max_workers=n, thread_name_prefix="index") as pool:
             list(pool.map(lambda v: work(v, fn), batch))
 
     def set_phase(phase: str, total: int) -> None:

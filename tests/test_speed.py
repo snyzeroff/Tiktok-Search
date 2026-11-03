@@ -57,7 +57,7 @@ def whisper(monkeypatch):
     calls: list[str] = []
     monkeypatch.setattr(pipeline.transcribe, "is_available", lambda: True)
 
-    def fake(path, model, lang="", threads=0):
+    def fake(path, model, lang="", threads=0, device="auto"):
         calls.append(Path(path).name)
         return [{"start": 3.0, "end": 4.0, "text": "transcription whisper"}]
 
@@ -174,3 +174,94 @@ def test_play_url_parsed_from_page():
     assert parse_item_struct(item, "1").play_url == "https://b/1.mp4"
     photo = {"id": "1", "video": {"playAddr": "https://x"}, "imagePost": {"images": [{"imageURL": {"urlList": ["https://i/1"]}}]}}
     assert parse_item_struct(photo, "1").play_url == ""
+
+
+# --- indexation depuis la liste des favoris (sans ouvrir chaque page) ---------------
+
+class NoPage(Client):
+    def fetch(self, vid):
+        self.fetched = getattr(self, "fetched", []) + [vid]
+        return super().fetch(vid)
+
+
+def _cache(db, vid, video=None, age=0.0, **extra):
+    import json
+    item = {"id": vid, "desc": f"depuis la liste {vid}", "author": {"uniqueId": "chef"},
+            "video": video if video is not None else {"duration": 12, "cover": "https://cdn/c.jpg",
+                                                      "playAddr": "https://cdn/v.mp4", "subtitleInfos": []}, **extra}
+    db.cache_put([(vid, json.dumps(item))], time.time() - age)
+
+
+def test_index_from_cached_list_without_opening_page(db, settings, whisper):
+    db.add_favorite("v1", "u")
+    _cache(db, "v1")
+    client = NoPage()
+    pipeline.process_video(db, settings, db.get_video("v1"), client, defer_media=True, play_urls=(urls := {}))
+    assert not getattr(client, "fetched", [])
+    v = db.get_video("v1")
+    assert v["description"] == "depuis la liste v1" and v["thumbnail"] == "/media/v1/cover.jpg"
+    assert v["media_pending"] == 1 and urls == {"v1": "https://cdn/v.mp4"}
+    assert db.cache_count() == 0  # consommé
+
+
+def test_cached_subtitles_are_used(db, settings, whisper):
+    db.add_favorite("v1", "u")
+    _cache(db, "v1", {"duration": 12, "subtitleInfos": [{"LanguageCodeName": "fra-FR", "Url": "https://s/fr",
+                                                          "Format": "webvtt"}]})
+    client = NoPage()
+    pipeline.process_video(db, settings, db.get_video("v1"), client, defer_media=True)
+    assert not getattr(client, "fetched", [])
+    v = db.get_video("v1")
+    assert v["transcript"] == "sous-titre tiktok" and v["media_pending"] == 0
+
+
+@pytest.mark.parametrize("case", ["no_subtitle_info", "expired_cache", "expired_subtitle_link"])
+def test_cache_falls_back_to_page(db, settings, whisper, case):
+    db.add_favorite("v1", "u")
+    if case == "no_subtitle_info":
+        _cache(db, "v1", {"duration": 12})                      # on ne sait pas s'il y a des sous-titres
+    elif case == "expired_cache":
+        _cache(db, "v1", age=pipeline.CACHE_MAX_AGE + 60)       # liens probablement expirés
+    else:
+        _cache(db, "v1", {"subtitleInfos": [{"LanguageCodeName": "fra-FR", "Url": "https://s/old", "Format": "webvtt"}]})
+
+    class Expired(NoPage):
+        def get_text(self, url):
+            if url == "https://s/old":
+                raise ValueError("403")
+            return super().get_text(url)
+
+    client = Expired()
+    pipeline.process_video(db, settings, db.get_video("v1"), client, defer_media=True)
+    assert client.fetched == ["v1"] and db.get_video("v1")["description"] == "légende v1"
+
+
+def test_cached_items_skip_the_page_throttle(db, settings, whisper, monkeypatch):
+    settings.request_delay = 5  # serait 2,5 s par page avec 2 fils
+    for i in range(20):
+        db.add_favorite(f"v{i}", "u")
+        _cache(db, f"v{i}")
+    start = time.monotonic()
+    pipeline.process_all(db, settings, client_factory=NoPage)
+    assert time.monotonic() - start < 3 and db.stats()["media_pending"] == 0
+
+
+def test_whisper_falls_back_to_cpu_when_cuda_libs_missing(monkeypatch, tmp_path):
+    from tiktok_search import transcribe
+
+    devices: list[str] = []
+
+    def run(path, model, lang, threads, device):
+        devices.append(device)
+        if device == "auto":
+            raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+        return [{"start": 0, "end": 1, "text": "ok"}]
+
+    monkeypatch.setattr(transcribe, "_run", run)
+    monkeypatch.setattr(transcribe, "_cpu_only", False)
+    assert transcribe.transcribe_segments(tmp_path / "v.mp4") == [{"start": 0, "end": 1, "text": "ok"}]
+    assert transcribe.transcribe_segments(tmp_path / "w.mp4")  # ensuite directement sur CPU
+    assert devices == ["auto", "cpu", "cpu"]
+    with pytest.raises(RuntimeError):  # une vraie erreur n'est pas masquée
+        monkeypatch.setattr(transcribe, "_run", lambda *a: (_ for _ in ()).throw(RuntimeError("fichier illisible")))
+        transcribe.transcribe_segments(tmp_path / "x.mp4", device="cpu")

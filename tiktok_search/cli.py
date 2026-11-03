@@ -88,7 +88,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Synchro impossible : {e}", file=sys.stderr)
             print(f"(capture de la page : {settings.tmp_dir / 'sync-debug.png'})", file=sys.stderr)
             return 1
-        print(f"@{r['username']} : {r['found']} favoris lus, {r['added']} nouveaux.")
+        print(f"@{r['username']} : {r['found']} favoris lus, {r['added']} nouveaux."
+              + ("" if r["complete"] or not r["found"] else " Liste pas encore lue en entier : relance la synchro, elle reprendra."))
         if r["added"]:
             print("Lance maintenant : tiktok-search process")
     elif args.cmd == "process":
