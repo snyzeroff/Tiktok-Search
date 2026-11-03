@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import analyze, browser_sync, importer, ocr, pipeline, tiktok_oauth, transcribe, whispercpp
+from . import analyze, browser_sync, categorize, importer, ocr, pipeline, tiktok_oauth, transcribe, whispercpp
 from .config import get_settings
 from .db import FTS_COLUMNS, Database
 from .search import FIELD_LABELS, search, segment_hits
@@ -49,7 +49,7 @@ class AccountJob:
 account = AccountJob()
 
 
-def _start_account_sync(login: bool = False, full: bool = False) -> bool:
+def _start_account_sync(login: bool = False, full: bool = False, collections: bool = False) -> bool:
     with account.lock:
         if account.running:
             return False
@@ -61,6 +61,13 @@ def _start_account_sync(login: bool = False, full: bool = False) -> bool:
 
     def run() -> None:
         try:
+            if collections:
+                r = browser_sync.sync_collections_into_db(db, settings, progress=progress)
+                n = len(r["collections"])
+                account.message = (f"{n} collection{'s' if n > 1 else ''} TikTok importée{'s' if n > 1 else ''}."
+                                   if n else "Aucune collection trouvée dans tes favoris TikTok.")
+                _start_processing()  # vidéos de collections pas encore dans les favoris
+                return
             r = browser_sync.sync_into_db(db, settings, login=login, full=full, progress=progress,
                                           on_added=lambda n: _start_processing())
             account.message = (f"{r['added']} nouveaux favoris importés." if r["added"]
@@ -245,22 +252,75 @@ def api_search(
     any: bool = False,
     kind: str = "",
     sort: str = "relevance",
+    category: int = 0,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> dict:
     fields = [f for f in field if f in FTS_COLUMNS] or None
-    results = search(db, q, fields=fields, any_term=any, limit=limit, offset=offset, kind=kind or None, sort=sort)
+    results = search(db, q, fields=fields, any_term=any, limit=limit, offset=offset, kind=kind or None, sort=sort,
+                     category=category or None)
+    cats = db.categories_for([r.video["id"] for r in results])
     return {
         "query": q,
-        "results": [{**_public(r.video), "score": round(r.score, 3), "matches": r.matches, "hits": r.hits}
-                    for r in results],
+        "results": [{**_public(r.video), "score": round(r.score, 3), "matches": r.matches, "hits": r.hits,
+                     "categories": cats.get(r.video["id"], [])} for r in results],
     }
 
 
 @app.get("/api/videos")
-def api_videos(kind: str = "", limit: int = Query(60, ge=1, le=200), offset: int = Query(0, ge=0)) -> dict:
-    return {"results": [{**_public(v), "matches": {}, "hits": []}
-                        for v in db.list_videos(limit=limit, offset=offset, kind=kind or None)]}
+def api_videos(kind: str = "", category: int = 0, limit: int = Query(60, ge=1, le=200),
+               offset: int = Query(0, ge=0)) -> dict:
+    videos = db.list_videos(limit=limit, offset=offset, kind=kind or None, category=category or None)
+    cats = db.categories_for([v["id"] for v in videos])
+    return {"results": [{**_public(v), "matches": {}, "hits": [], "categories": cats.get(v["id"], [])}
+                        for v in videos]}
+
+
+# --- Catégories -------------------------------------------------------------------
+
+class CategorySet(BaseModel):
+    id: str = "perso"
+    name: str = Field("Mes catégories", max_length=200)
+    description: str = Field("", max_length=1000)
+    categories: list[dict] = Field(..., max_length=60)
+
+
+@app.get("/api/categories")
+def api_categories() -> dict:
+    return {"categories": [{k: c[k] for k in ("id", "name", "source", "set_name", "keywords", "count")}
+                           for c in db.list_categories()],
+            "auto_set": categorize.saved_set(db)}
+
+
+@app.post("/api/categories/tiktok")
+def api_categories_tiktok() -> dict:
+    """Importe tes collections TikTok comme catégories (en tâche de fond, comme la synchro)."""
+    if not browser_sync.account_state(db, browser_sync.default_profile_dir())["has_session"]:
+        raise HTTPException(400, "Connecte d'abord ton compte TikTok (Mes favoris → Se connecter à TikTok).")
+    return {"started": _start_account_sync(collections=True)}
+
+
+@app.post("/api/categories/propose")
+def api_categories_propose() -> dict:
+    return categorize.propose(db, settings)
+
+
+@app.post("/api/categories/preview")
+def api_categories_preview(cset: CategorySet) -> dict:
+    return categorize.preview(db, cset.model_dump())
+
+
+@app.post("/api/categories/apply")
+def api_categories_apply(cset: CategorySet) -> dict:
+    try:
+        return categorize.apply(db, cset.model_dump())
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.post("/api/categories/clear")
+def api_categories_clear() -> dict:
+    return {"deleted": categorize.clear(db)}
 
 
 @app.get("/api/video/{video_id}")

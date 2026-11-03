@@ -8,6 +8,7 @@ que fait le vrai : cookie ``sessionid`` après connexion, ``/passport/web/accoun
 from __future__ import annotations
 
 import json
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
@@ -62,6 +63,7 @@ def test_store_keeps_tiktok_order_and_prefills(tmp_path):
 
 PROFILE_HTML = """<!doctype html><html><body style="margin:0">
 <div role="tablist"><p role="tab">Vidéos</p><p role="tab" data-e2e="favorites-tab" id="fav">Favoris</p></div>
+<div role="tablist" id="sub" hidden><p role="tab">Publications</p><p role="tab" id="colls">Collections</p></div>
 <div id="grid"></div>
 <script>
 let cursor = 0, more = true, loading = false;
@@ -71,9 +73,20 @@ async function load() {
   const j = await r.json(); cursor = j.cursor; more = j.hasMore; loading = false;
   for (const it of j.itemList) { const d = document.createElement('div'); d.style.height = '400px'; d.textContent = it.id; grid.appendChild(d); }
 }
-fav.onclick = load;
+fav.onclick = () => { sub.hidden = false; load(); };
+colls.onclick = async () => {
+  const r = await fetch('/api/user/collection_list/?count=2&cursor=0&secUid=abc', {headers: {'x-ui': '1'}});
+  const j = await r.json(); for (const c of j.collectionList) grid.append(c.name);
+};
 addEventListener('scroll', () => { if (innerHeight + scrollY >= document.body.scrollHeight - 50) load(); });
 </script></body></html>"""
+
+
+COLLECTIONS = [  # (id, nom, vidéos) ; la 3e page de collection ne charge rien d'elle-même
+    ("111", "Recettes", list(range(0, 8))), ("222", "Sport", [10, 11, 12]), ("333", "Muette", [20, 21])]
+COLLECTION_HTML = """<!doctype html><body><script>
+fetch('/api/collection/item_list/?collectionId=%s&count=5&cursor=0', {headers: {'x-ui': '1'}});
+</script></body>"""
 
 
 class FakeTikTok(BaseHTTPRequestHandler):
@@ -81,6 +94,7 @@ class FakeTikTok(BaseHTTPRequestHandler):
     cursors: list[tuple[int, bool]] = []   # (cursor, demandé par la page elle-même ?)
     reject_direct = False                 # refuse les requêtes qui ne viennent pas de l'interface
     broken_from: int | None = None        # simule une coupure à partir de ce curseur
+    collection_calls: list[tuple] = []
 
     def log_message(self, *a):  # silence
         pass
@@ -108,6 +122,21 @@ class FakeTikTok(BaseHTTPRequestHandler):
             self._send(json.dumps({"data": {"username": "moi"} if logged else {}}), "application/json")
         elif url.path == "/@moi":
             self._send(PROFILE_HTML)
+        elif url.path == "/api/user/collection_list/":
+            cur = int(parse_qs(url.query).get("cursor", ["0"])[0])
+            page = [{"collectionId": cid, "name": name, "total": len(items)} for cid, name, items in COLLECTIONS[cur:cur + 2]]
+            self._send(json.dumps({"collectionList": page, "cursor": cur + 2, "hasMore": cur + 2 < len(COLLECTIONS)}),
+                       "application/json")
+        elif url.path.startswith("/@moi/collection/"):
+            cid = url.path.rsplit("-", 1)[-1]
+            self._send(COLLECTION_HTML % cid if cid != "333" else "<p>vide</p>")
+        elif url.path == "/api/collection/item_list/":
+            q = parse_qs(url.query)
+            cid, cur = q["collectionId"][0], int(q.get("cursor", ["0"])[0])
+            FakeTikTok.collection_calls.append((cid, cur, self.headers.get("x-ui") == "1", q.get("sourceType", [""])[0]))
+            ids = next(items for c, _, items in COLLECTIONS if c == cid)
+            page = [_item(i) for i in ids[cur:cur + 5]]
+            self._send(json.dumps({"itemList": page, "cursor": cur + 5, "hasMore": cur + 5 < len(ids)}), "application/json")
         elif url.path == "/api/user/collect/item_list/":
             cur = int(parse_qs(url.query).get("cursor", ["0"])[0])
             ui = self.headers.get("x-ui") == "1"
@@ -127,7 +156,7 @@ def fake_site():
     server = ThreadingHTTPServer(("127.0.0.1", 0), FakeTikTok)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     FakeTikTok.requests, FakeTikTok.cursors = [], []
-    FakeTikTok.reject_direct, FakeTikTok.broken_from = False, None
+    FakeTikTok.reject_direct, FakeTikTok.broken_from, FakeTikTok.collection_calls = False, None, []
     yield f"http://127.0.0.1:{server.server_address[1]}"
     server.shutdown()
 
@@ -215,3 +244,23 @@ def _headless(launch):
     def wrapped(pw, profile, headless, channel):
         return launch(pw, profile, True, channel)
     return wrapped
+
+
+@needs_browser
+def test_tiktok_collections_become_categories(fake_site, tmp_path, monkeypatch):
+    db, settings = _setup(tmp_path, monkeypatch)
+    browser_sync.sync_into_db(db, settings, login=True, base=fake_site, pace=FAST)
+    r = browser_sync.sync_collections_into_db(db, settings, base=fake_site, pace=FAST)
+    assert r["collections"] == {"Recettes": 8, "Sport": 3, "Muette": 2} and r["complete"]
+    cats = {c["name"]: c for c in db.list_categories()}
+    assert cats["Recettes"]["source"] == "tiktok" and cats["Recettes"]["count"] == 0  # pas encore indexées
+    assert sorted(v for v, cs in db.categories_for([_item(i)["id"] for i in range(13)]).items()
+                  if any(c["name"] == "Sport" for c in cs)) == [_item(i)["id"] for i in (10, 11, 12)]
+    calls = FakeTikTok.collection_calls
+    assert ("111", 0, True, "") in calls and ("111", 5, False, "") in calls  # 1re page par la page, suite en direct
+    assert ("333", 0, False, "113") in calls  # page muette : adresse reconstruite à partir de la liste
+
+    # Une collection supprimée sur TikTok disparaît au prochain import.
+    monkeypatch.setattr(sys.modules[__name__], "COLLECTIONS", COLLECTIONS[:1])
+    browser_sync.sync_collections_into_db(db, settings, base=fake_site, pace=FAST)
+    assert [c["name"] for c in db.list_categories()] == ["Recettes"]

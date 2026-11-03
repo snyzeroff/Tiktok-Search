@@ -1,4 +1,4 @@
-"""Interface en ligne de commande : tiktok-search login|sync|import|links|process|search|stats|serve."""
+"""Interface en ligne de commande : tiktok-search login|sync|collections|categorize|import|links|process|search|stats|serve."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 
-from . import analyze, browser_sync, importer, ocr, pipeline, transcribe
+from . import analyze, browser_sync, categorize, importer, ocr, pipeline, transcribe
 from .config import get_settings
 from .db import Database
 from .search import FIELD_LABELS, MARK_CLOSE, MARK_OPEN, search
@@ -34,6 +34,12 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("sync", help="Récupérer les nouveaux favoris du compte connecté")
     s.add_argument("--full", action="store_true", help="Relire toute la liste des favoris")
     s.add_argument("--show", action="store_true", help="Afficher la fenêtre du navigateur")
+
+    sub.add_parser("collections", help="Importer tes collections TikTok comme catégories")
+    s = sub.add_parser("categorize", help="Trier automatiquement les favoris en catégories")
+    s.add_argument("--set", default="themes", help="Jeu de catégories : themes, usage, hashtags, ia-1… (voir --list)")
+    s.add_argument("--list", action="store_true", help="Lister les jeux proposés et leurs catégories")
+    s.add_argument("--apply", action="store_true", help="Appliquer (sinon simple aperçu)")
 
     s = sub.add_parser("process", help="Récupérer légendes, transcriptions et texte à l'écran")
     s.add_argument("--retry-errors", action="store_true")
@@ -93,6 +99,33 @@ def main(argv: list[str] | None = None) -> int:
               + ("" if r["complete"] or not r["found"] else " Liste pas encore lue en entier : relance la synchro, elle reprendra."))
         if r["added"]:
             print("Lance maintenant : tiktok-search process")
+    elif args.cmd == "collections":
+        try:
+            r = browser_sync.sync_collections_into_db(db, settings, progress=print)
+        except browser_sync.SyncError as e:
+            print(f"Import impossible : {e}", file=sys.stderr)
+            return 1
+        for name, n in r["collections"].items():
+            print(f"  {name} : {n} vidéos")
+        print(f"{len(r['collections'])} collections importées. Lance : tiktok-search process")
+    elif args.cmd == "categorize":
+        proposals = categorize.propose(db, settings)
+        if proposals["llm_error"]:
+            print(f"(IA indisponible : {proposals['llm_error']})", file=sys.stderr)
+        sets = {s["id"]: s for s in proposals["sets"]}
+        if args.list or args.set not in sets:
+            for s in sets.values():
+                print(f"{s['id']:>10}  {s['name']} : " + ", ".join(c["name"] for c in s["categories"]))
+            return 0 if args.list else 1
+        cset = sets[args.set]
+        if args.apply:
+            for name, n in categorize.apply(db, cset)["categories"].items():
+                print(f"  {name} : {n}")
+            print("Tri appliqué.")
+        else:
+            for c in categorize.preview(db, cset)["categories"]:
+                print(f"  {c['name']} : {c['count']}" + (f"   ex. {c['examples'][0]}" if c["examples"] else ""))
+            print("Aperçu seulement : ajoute --apply pour appliquer.")
     elif args.cmd == "process":
         if args.all:
             print(f"{db.reset_all()} vidéos remises en attente.")
@@ -167,6 +200,10 @@ def port_free(host: str, port: int) -> bool:
     import socket
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        if sys.platform != "win32":
+            # Comme uvicorn : un port fermé il y a quelques secondes (TIME_WAIT) est réutilisable.
+            # (Sous Windows, SO_REUSEADDR permettrait de « voler » un port occupé : on ne le met pas.)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind((host, port))
         except OSError:

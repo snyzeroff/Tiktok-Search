@@ -123,6 +123,43 @@
   .pick { align-self: start; padding-top: 2px; }
   .pick input { width: 18px; height: 18px; cursor: pointer; }
 
+  /* catégories */
+  .ctags { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 2px; }
+  .ctag { border: 1px solid var(--line); background: var(--surface); color: var(--muted); border-radius: 999px; padding: 1px 9px; font-size: 12.5px; cursor: pointer; font: inherit; font-size: 12.5px; }
+  .ctag.tiktok::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ink); margin-right: 5px; vertical-align: 1px; }
+  .ctag:hover, .ctag:focus-visible { color: var(--ink); border-color: var(--ink); }
+  #catSel { max-width: 230px; }
+
+  /* liste / grille */
+  .results-head .end { display: flex; align-items: center; gap: 10px; }
+  .view-ctl { display: inline-flex; gap: 2px; background: var(--sunk); border-radius: var(--r-s); padding: 2px; }
+  .view-ctl button { border: 0; background: none; width: 30px; height: 28px; border-radius: 5px; color: var(--muted); cursor: pointer; display: grid; place-items: center; padding: 0; }
+  .view-ctl button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  .view-ctl svg { width: 16px; height: 16px; }
+  .list.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 20px 14px; padding-top: 18px; }
+  .list.grid .row { display: flex; flex-direction: column; gap: 8px; padding: 0; border: 0; position: relative; min-width: 0; }
+  .list.grid .row:hover { background: none; }
+  .list.grid .row.selected .thumb { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .list.grid .thumb { width: 100%; aspect-ratio: 3 / 4; }
+  .list.grid .pick { position: absolute; top: 8px; right: 8px; padding: 4px; line-height: 0; background: rgba(10,12,18,.55); border-radius: 6px; }
+  .list.grid .found, .list.grid .strip, .list.grid .pages-strip, .list.grid .more-moments, .list.grid .who time { display: none; }
+  .list.grid .moments li:nth-child(n+2) { display: none; }
+  .list.grid .caption { font-size: 14px; }
+
+  /* tri en catégories */
+  .set-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 6px; }
+  .set-tabs button { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 5px 12px; font: inherit; font-size: 14px; color: var(--muted); cursor: pointer; }
+  .set-tabs button[aria-pressed="true"] { border-color: var(--ink); color: var(--ink); font-weight: 600; }
+  .set-tabs .ai { font-size: 11px; font-weight: 700; background: var(--accent-soft); color: var(--accent); border-radius: 4px; padding: 0 5px; margin-left: 4px; }
+  .drawer .text { width: 100%; border: 1px solid var(--line); background: var(--paper); border-radius: var(--r-s); padding: 7px 10px; font: inherit; font-size: 14px; color: var(--ink); }
+  .catrow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px 8px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .catrow .cname { font-weight: 600; }
+  .catrow .ckw { grid-column: 1 / -1; font-size: 13px; color: var(--muted); resize: vertical; min-height: 0; line-height: 1.45; }
+  .catrow .ccount { font-size: 13px; color: var(--muted); min-width: 3ch; text-align: right; }
+  .catrow .ccount.stale { opacity: .4; }
+  .catrow .del { border: 0; background: none; color: var(--faint); font-size: 18px; width: 28px; height: 28px; border-radius: 6px; cursor: pointer; }
+  .catrow .del:hover { color: var(--danger); background: var(--sunk); }
+
   /* frise : la signature visuelle */
   .strip { position: relative; height: 22px; margin: 14px 0 4px; }
   .strip::before { content: ""; position: absolute; left: 0; right: 0; top: 10px; height: 3px; border-radius: 3px; background: var(--sunk); }
@@ -286,6 +323,8 @@
         <button type="button" data-kind="video" aria-pressed="false">Vidéos</button>
         <button type="button" data-kind="photo" aria-pressed="false">Carrousels</button>
       </div>
+      <select id="catSel" class="plain" aria-label="Catégorie" hidden></select>
+      <button class="btn bare" id="sortOpen" type="button">Trier en catégories</button>
       <div class="field-chips" id="fieldboxes" role="group" aria-label="Chercher dans"></div>
       <div class="end">
         <label class="tgl"><input type="checkbox" id="any"> Au moins un des mots</label>
@@ -370,6 +409,29 @@
   </div>
 </dialog>
 
+<dialog id="sortDlg" class="drawer" aria-labelledby="sortTitle">
+  <div class="dlg-head"><div class="title"><b id="sortTitle">Trier en catégories</b></div>
+    <button class="icon-btn" type="button" onclick="document.getElementById('sortDlg').close()" aria-label="Fermer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+  <div class="body">
+    <h3>Mes collections TikTok <span class="tip start"><button type="button" class="tip-btn" aria-label="Astuce" aria-expanded="false">?</button><span class="tip-bubble" role="tooltip"><b>Astuce</b>Les dossiers que tu as créés dans TikTok (Favoris → Collections) deviennent des catégories, avec les mêmes vidéos. Relance l'import après avoir rangé de nouvelles vidéos sur TikTok.</span></span></h3>
+    <p id="tkLine" role="status"></p>
+    <div class="actions"><button class="btn quiet" type="button" id="tkImport">Importer mes collections</button></div>
+
+    <h3>Tri automatique <span class="tip start"><button type="button" class="tip-btn" aria-label="Astuce" aria-expanded="false">?</button><span class="tip-bubble" role="tooltip"><b>Astuce</b>Choisis un jeu de catégories, renomme-les, ajoute ou retire des mots-clés, puis « Aperçu » pour voir la répartition. Chaque vidéo va dans la catégorie dont les mots-clés apparaissent le plus dans sa légende, ses hashtags, sa transcription ou son texte à l'écran. Rien n'est envoyé à l'IA pour ranger les vidéos.</span></span></h3>
+    <p id="autoLine"></p>
+    <div class="actions"><button class="btn" type="button" id="proposeBtn">Proposer des catégories</button><button class="btn bare" type="button" id="clearAuto" hidden>Effacer le tri</button></div>
+    <div class="set-tabs" id="setTabs" role="group" aria-label="Jeux de catégories"></div>
+    <div id="setEditor" hidden>
+      <p id="setDesc" class="small"></p>
+      <input class="text" id="setName" aria-label="Nom du tri" maxlength="60">
+      <div id="catRows"></div>
+      <div class="actions"><button class="btn bare" type="button" id="addCat">+ Ajouter une catégorie</button></div>
+      <div class="actions"><button class="btn quiet" type="button" id="previewBtn">Aperçu</button><button class="btn" type="button" id="applyBtn">Appliquer le tri</button></div>
+    </div>
+    <p class="msg" id="sortMsg" role="status"></p>
+  </div>
+</dialog>
+
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -402,6 +464,8 @@ function placeTip(t) {
 document.addEventListener("mouseover", e => { const t = e.target.closest?.(".tip"); if (t && !t.contains(e.relatedTarget)) placeTip(t); });
 document.addEventListener("focusin", e => { const t = e.target.closest?.(".tip"); if (t) placeTip(t); });
 let labels = {}, features = {}, lastResults = [], selected = new Set(), lastQuery = "", refreshTimer = null, searchSeq = 0, pageSize = 50, hasMore = false, kindFilter = "";
+let categories = [], autoSet = null, catFilter = "", catSets = [], curSet = null, accountWasRunning = false;
+let view = "list"; try { view = localStorage.getItem("tts-view") === "grid" ? "grid" : "list"; } catch {}
 
 // ---------- thème ----------
 const THEMES = ["auto", "light", "dark"];
@@ -470,6 +534,9 @@ async function refresh() {
     <li>Analyse IA ${yes(f.llm !== "none", esc(f.llm_model), "extraction locale seule")}</li>
     <li>Compte TikTok ${yes(r.account.username, "@" + esc(r.account.username), "non connecté")}</li>`;
   renderAccount(r.account, f);
+  if ($("#sortDlg").open && r.account.running) $("#tkLine").textContent = r.account.message || "Import en cours…";
+  if (accountWasRunning && !r.account.running) loadCategories().then(() => { if ($("#sortDlg").open && r.account.message) $("#tkLine").textContent = r.account.message; });
+  accountWasRunning = r.account.running;
   $("#oauthBlock").hidden = !f.tiktok_oauth;
   refreshTimer = setTimeout(refresh, j.running || r.account.running ? 2000 : 10000);
 }
@@ -527,6 +594,7 @@ async function doSearch(e, more = false) {
     url = "/api/search?";
   } else url = "/api/videos?";
   if (kindFilter) p.set("kind", kindFilter);
+  if (catFilter) p.set("category", catFilter);
   history.replaceState(null, "", q ? "?q=" + encodeURIComponent(q) : location.pathname);
   let r;
   try { r = await api(url + p); } catch (err) { if (seq === searchSeq) $("#results").innerHTML = `<div class="empty"><h3>Recherche impossible</h3><p>${esc(err.message)}</p></div>`; return; }
@@ -580,8 +648,13 @@ function renderResults(q, from = 0) {
       : `<div class="empty"><h3>Commence par ajouter tes favoris</h3><button class="btn" type="button" onclick="document.getElementById('drawer').showModal()">Ajouter mes favoris</button></div>`;
     return;
   }
-  const head = `<div class="results-head"><h2>${q ? `${res.length}${hasMore ? "+" : ""} résultat${res.length > 1 ? "s" : ""}` : "Ajoutés récemment"}</h2>
-    ${q ? tip(`Sur la frise, chaque repère est un passage trouvé : <span class="legend"><span><i></i>prononcé</span><span><i class="sq"></i>à l'écran</span></span>Clique dessus pour y aller.`, "end") : ""}</div>`;
+  const catName = catFilter ? categories.find(c => String(c.id) === String(catFilter))?.name : "";
+  const head = `<div class="results-head"><h2>${q ? `${res.length}${hasMore ? "+" : ""} résultat${res.length > 1 ? "s" : ""}` : catName ? esc(catName) : "Ajoutés récemment"}</h2>
+    <div class="end">${q ? tip(`Sur la frise, chaque repère est un passage trouvé : <span class="legend"><span><i></i>prononcé</span><span><i class="sq"></i>à l'écran</span></span>Clique dessus pour y aller.`, "end") : ""}
+    <div class="view-ctl" role="group" aria-label="Affichage">
+      <button type="button" data-view="list" aria-pressed="${view === "list"}" title="Liste" aria-label="Liste"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+      <button type="button" data-view="grid" aria-pressed="${view === "grid"}" title="Cases" aria-label="Cases"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></svg></button>
+    </div></div></div>`;
   const rows = res.map((v, idx) => {
     const hits = v.hits || [];
     const len = v.kind === "photo" ? `${v.images.length} p.` : (v.duration ? fmt(v.duration) : "");
@@ -592,6 +665,7 @@ function renderResults(q, from = 0) {
       <div style="min-width:0">
         <p class="who"><a data-open="${esc(v.id)}" tabindex="0" role="button">@${esc(v.author || "inconnu")}</a>${v.kind === "photo" ? `<span class="kind">Carrousel</span>` : ""}<time>${esc(fmtDate(v.favorited_at))}</time></p>
         ${caption ? `<p class="caption">${caption}</p>` : ""}
+        ${(v.categories || []).length ? `<div class="ctags">${v.categories.map(c => `<button type="button" class="ctag ${c.source === "tiktok" ? "tiktok" : ""}" data-cat="${c.id}" title="${c.source === "tiktok" ? "Collection TikTok" : "Tri automatique"} : voir toute la catégorie">${esc(c.name)}</button>`).join("")}</div>` : ""}
         ${fields.map(([k, s]) => `<p class="found"><span class="where">${esc(labels[k] || k)}</span>${hl(s)}</p>`).join("")}
         ${strip(v, hits, idx >= from)}
         ${momentList(v, hits)}
@@ -599,11 +673,15 @@ function renderResults(q, from = 0) {
       <label class="pick" title="Sélectionner pour l'analyse"><input type="checkbox" data-sel="${esc(v.id)}" ${selected.has(v.id) ? "checked" : ""} aria-label="Sélectionner pour l'analyse"></label>
     </li>`;
   }).join("");
-  $("#results").innerHTML = head + `<ul class="list">${rows}</ul>` + (hasMore ? `<div class="loadmore"><button class="btn quiet" id="more" type="button">Afficher plus</button></div>` : "");
+  $("#results").innerHTML = head + `<ul class="list ${view === "grid" ? "grid" : ""}">${rows}</ul>` + (hasMore ? `<div class="loadmore"><button class="btn quiet" id="more" type="button">Afficher plus</button></div>` : "");
 }
 
 $("#results").addEventListener("click", e => {
   if (e.target.id === "more") { e.target.disabled = true; doSearch(null, true); return; }
+  const vb = e.target.closest("[data-view]");
+  if (vb) { setView(vb.dataset.view); return; }
+  const ct = e.target.closest("[data-cat]");
+  if (ct) { setCategory(ct.dataset.cat); return; }
   const sel = e.target.closest("[data-sel]");
   if (sel) { toggleSel(sel.dataset.sel, sel.checked); return; }
   const o = e.target.closest("[data-open]");
@@ -624,6 +702,132 @@ $("#fieldboxes").onclick = e => {
   if ($("#q").value.trim()) doSearch();
 };
 $("#any").onchange = $("#sort").onchange = () => $("#q").value.trim() && doSearch();
+
+// ---------- affichage liste / cases ----------
+function setView(v) {
+  view = v;
+  try { localStorage.setItem("tts-view", v); } catch {}
+  document.querySelector("#results .list")?.classList.toggle("grid", v === "grid");
+  document.querySelectorAll(".view-ctl button").forEach(b => b.setAttribute("aria-pressed", b.dataset.view === v));
+}
+
+// ---------- catégories ----------
+async function loadCategories() {
+  try { const r = await api("/api/categories"); categories = r.categories; autoSet = r.auto_set; } catch { return; }
+  if (catFilter && !categories.some(c => String(c.id) === String(catFilter))) catFilter = "";
+  const tk = categories.filter(c => c.source === "tiktok"), au = categories.filter(c => c.source === "auto");
+  const opt = c => `<option value="${c.id}" ${String(c.id) === String(catFilter) ? "selected" : ""}>${esc(c.name)} (${c.count})</option>`;
+  $("#catSel").innerHTML = `<option value="">Toutes les catégories</option>`
+    + (tk.length ? `<optgroup label="Collections TikTok">${tk.map(opt).join("")}</optgroup>` : "")
+    + (au.some(c => c.count) ? `<optgroup label="${esc(au[0].set_name || "Tri automatique")}">${au.filter(c => c.count || String(c.id) === String(catFilter)).map(opt).join("")}</optgroup>` : "");
+  $("#catSel").hidden = !categories.length;
+  $("#tkLine").textContent = tk.length
+    ? `${plural(tk.length, "collection")} : ${tk.slice(0, 6).map(c => c.name).join(", ")}${tk.length > 6 ? "…" : ""}`
+    : "Tes collections TikTok (Favoris → Collections) deviennent des catégories.";
+  $("#autoLine").textContent = au.length ? `Tri actuel : « ${au[0].set_name || "Mes catégories"} », ${plural(au.length, "catégorie")}.` : "Aucun tri automatique pour l'instant.";
+  $("#clearAuto").hidden = !au.length;
+}
+function setCategory(id) {
+  catFilter = String(id || "");
+  $("#catSel").value = catFilter;
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  doSearch();
+}
+$("#catSel").onchange = () => setCategory($("#catSel").value);
+
+$("#sortOpen").onclick = () => {
+  $("#sortDlg").showModal();
+  if (!curSet && autoSet) { catSets = [autoSet]; editSet(autoSet); }
+};
+$("#tkImport").onclick = async () => {
+  try {
+    const j = await api("/api/categories/tiktok", { method: "POST" });
+    $("#tkLine").textContent = j.started ? "Import en cours…" : "Une synchro est déjà en cours, réessaie dans un instant.";
+  } catch (err) { $("#tkLine").textContent = err.message; }
+  refresh();
+};
+$("#proposeBtn").onclick = async () => {
+  const b = $("#proposeBtn"); b.disabled = true;
+  $("#sortMsg").textContent = "Analyse de tes favoris…";
+  try {
+    const r = await api("/api/categories/propose", { method: "POST" });
+    catSets = r.sets;
+    if (autoSet) catSets.unshift({ ...autoSet, id: "actuel", name: autoSet.name + " (actuel)" });
+    editSet(catSets[0]);
+    $("#sortMsg").textContent = r.llm_error ? `IA indisponible (${r.llm_error}) : voici des jeux proposés sans IA.` : "";
+  } catch (err) { $("#sortMsg").textContent = err.message; }
+  b.disabled = false;
+};
+function renderSetTabs() {
+  $("#setTabs").innerHTML = catSets.map((x, i) => `<button type="button" data-set="${i}" aria-pressed="${curSet?.id === x.id}">${esc(x.name)}${x.by_ai ? '<span class="ai">IA</span>' : ""}</button>`).join("");
+}
+$("#setTabs").onclick = e => { const b = e.target.closest("[data-set]"); if (b) editSet(catSets[+b.dataset.set]); };
+function editSet(x) {
+  curSet = JSON.parse(JSON.stringify(x));
+  $("#setEditor").hidden = false;
+  $("#setName").value = curSet.name;
+  $("#setDesc").textContent = curSet.description || "";
+  renderSetTabs(); renderCatRows();
+}
+function renderCatRows(counts) {
+  $("#catRows").innerHTML = curSet.categories.map((c, i) => {
+    const other = c.name === "Autre";
+    const n = counts?.[c.name];
+    return `<div class="catrow">
+      <input class="text cname" value="${esc(c.name)}" aria-label="Nom de la catégorie" maxlength="60">
+      <span class="ccount num" title="${esc((n?.examples || []).join("\n"))}">${n ? n.count : ""}</span>
+      <button type="button" class="del" data-del="${i}" aria-label="Retirer ${esc(c.name)}">×</button>
+      <textarea class="text ckw" rows="${other ? 1 : 3}" ${other ? 'disabled placeholder="Tout ce qui ne va nulle part ailleurs"' : 'placeholder="mots-clés, séparés par des virgules"'} aria-label="Mots-clés de ${esc(c.name)}">${esc(c.keywords.join(", "))}</textarea>
+    </div>`;
+  }).join("");
+}
+function readSet() {
+  curSet.name = $("#setName").value.trim() || "Mes catégories";
+  curSet.categories = [...document.querySelectorAll(".catrow")].map(r => ({
+    name: r.querySelector(".cname").value.trim(),
+    keywords: r.querySelector(".ckw").value.split(",").map(k => k.trim()).filter(Boolean),
+  })).filter(c => c.name);
+  return curSet;
+}
+$("#catRows").onclick = e => {
+  const d = e.target.closest("[data-del]"); if (!d) return;
+  readSet(); curSet.categories.splice(+d.dataset.del, 1); renderCatRows();
+};
+$("#catRows").oninput = () => document.querySelectorAll(".ccount").forEach(c => c.classList.add("stale"));
+$("#addCat").onclick = () => {
+  readSet();
+  const at = curSet.categories.findIndex(c => c.name === "Autre");
+  curSet.categories.splice(at < 0 ? curSet.categories.length : at, 0, { name: "Nouvelle catégorie", keywords: [] });
+  renderCatRows();
+  const rows = document.querySelectorAll(".catrow .cname"); rows[at < 0 ? rows.length - 1 : at]?.select();
+};
+const jsonPost = body => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+$("#previewBtn").onclick = async () => {
+  $("#sortMsg").textContent = "Calcul de la répartition…";
+  try {
+    const r = await api("/api/categories/preview", jsonPost(readSet()));
+    renderCatRows(Object.fromEntries(r.categories.map(c => [c.name, c])));
+    const other = r.categories.find(c => c.name === "Autre")?.count || 0;
+    $("#sortMsg").textContent = `${r.total} vidéos réparties${other ? `, dont ${other} dans « Autre » : ajoute des mots-clés pour les ranger` : ""}. Survole un nombre pour voir des exemples.`;
+  } catch (err) { $("#sortMsg").textContent = err.message; }
+};
+$("#applyBtn").onclick = async () => {
+  const set = readSet();
+  if (!confirm(`Ranger tes favoris dans ces ${set.categories.length} catégories ? Le tri automatique précédent sera remplacé (les collections TikTok ne changent pas).`)) return;
+  $("#sortMsg").textContent = "Tri en cours…";
+  try {
+    await api("/api/categories/apply", jsonPost(set));
+    await loadCategories();
+    $("#sortMsg").textContent = "Tri appliqué. Choisis une catégorie dans la liste à côté de la recherche.";
+    doSearch();
+  } catch (err) { $("#sortMsg").textContent = err.message; }
+};
+$("#clearAuto").onclick = async () => {
+  if (!confirm("Effacer le tri automatique ? Tes collections TikTok restent.")) return;
+  try { await api("/api/categories/clear", { method: "POST" }); } catch (err) { $("#sortMsg").textContent = err.message; return; }
+  curSet = null; catSets = []; $("#setEditor").hidden = true; $("#setTabs").innerHTML = "";
+  await loadCategories(); doSearch();
+};
 
 // ---------- sélection & analyse ----------
 function toggleSel(id, on) {
@@ -868,6 +1072,7 @@ $("#reindex").onclick = () => confirm("Tout réindexer ? Les infos de chaque fav
 $("#sync").onclick = () => post("/api/tiktok/sync");
 const initial = new URLSearchParams(location.search).get("q");
 refresh().then(() => { if (initial) $("#q").value = initial; doSearch(); });
+loadCategories();
 api("/api/account/sync?auto=true", { method: "POST" }).then(j => j?.started && refresh()).catch(() => {});
 </script>
 </body>

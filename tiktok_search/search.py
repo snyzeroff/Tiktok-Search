@@ -146,6 +146,7 @@ def search(
     offset: int = 0,
     kind: str | None = None,
     sort: str = "relevance",
+    category: int | None = None,
 ) -> list[SearchResult]:
     match = build_match_query(query, any_term=any_term)
     if not match:
@@ -165,6 +166,9 @@ def search(
     if kind in ("video", "photo"):
         where += " AND v.kind = ?"
         params.append(kind)
+    if category:
+        where += " AND v.id IN (SELECT video_id FROM video_categories WHERE category_id = ?)"
+        params.append(category)
     order = "v.favorited_at DESC" if sort == "date" else "score"
     sql = f"""
         SELECT v.*, bm25(videos_fts, 0, {weights}) AS score, {snippets}

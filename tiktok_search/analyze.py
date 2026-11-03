@@ -338,6 +338,31 @@ def call_ollama(settings: Settings, text: str, images: list[tuple[str, bytes]]) 
 PROVIDERS = {"gemini": call_gemini, "ollama": call_ollama}
 
 
+def llm_json(settings: Settings, prompt: str) -> dict:
+    """Une requête texte → JSON, avec le fournisseur configuré (sans schéma imposé)."""
+    if settings.llm_provider == "gemini":
+        if not settings.gemini_api_key:
+            raise LLMError("GEMINI_API_KEY manquante (gratuite sur https://aistudio.google.com/apikey).")
+        r = _post_with_retry(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent",
+            headers={"x-goog-api-key": settings.gemini_api_key},
+            json={"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                  "generationConfig": {"responseMimeType": "application/json", "temperature": 0.4}})
+        cands = r.json().get("candidates") or []
+        parts = ((cands[0].get("content") or {}).get("parts") or []) if cands else []
+        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+    elif settings.llm_provider == "ollama":
+        r = _post_with_retry(f"{settings.ollama_url.rstrip('/')}/api/chat", json={
+            "model": settings.ollama_model, "stream": False, "format": "json", "options": {"temperature": 0.4},
+            "messages": [{"role": "user", "content": prompt}]})
+        text = (r.json().get("message") or {}).get("content", "")
+    else:
+        raise LLMError("aucune IA configurée (TTS_LLM)")
+    if not text:
+        raise LLMError("réponse vide")
+    return parse_json_loose(text)
+
+
 def model_name(settings: Settings) -> str:
     return {"gemini": settings.gemini_model, "ollama": settings.ollama_model}.get(settings.llm_provider, "")
 

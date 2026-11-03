@@ -43,6 +43,11 @@ log = logging.getLogger(__name__)
 
 TIKTOK = "https://www.tiktok.com"
 FAVORITES_API = "/api/user/collect/item_list"
+COLLECTION_LIST_API = "/api/user/collection_list"
+COLLECTION_ITEMS_API = "/api/collection/item_list"
+COLLECTIONS_TAB_TEXT = re.compile(r"^\s*(collections?|colecciones|cole[cç][oõ]es|sammlungen|raccolte|kolekcje|collecties)\s*$", re.I)
+COLLECTIONS_TAB_SELECTORS = ('[data-e2e="collection-tab"]', '[data-e2e="favorites-collection-tab"]',
+                             '[data-e2e="collections-tab"]')
 SESSION_COOKIES = ("sessionid", "sessionid_ss")
 FAVORITES_TAB_SELECTORS = ('[data-e2e="favorites-tab"]', '[data-e2e="favorite-tab"]', '[data-e2e="collect-tab"]')
 # Nom de l'onglet selon la langue de TikTok.
@@ -220,11 +225,14 @@ def _has_captcha(page) -> bool:
 
 def _find_favorites_tab(page, timeout: float = 20):
     """Attend que la page du profil affiche ses onglets, puis renvoie l'onglet « Favoris »."""
+    return _find_tab(page, FAVORITES_TAB_TEXT, FAVORITES_TAB_SELECTORS, timeout)
+
+
+def _find_tab(page, text: re.Pattern, selectors: tuple[str, ...], timeout: float = 20):
     deadline = time.monotonic() + timeout
     while True:
-        candidates = [page.locator(sel).first for sel in FAVORITES_TAB_SELECTORS]
-        candidates += [page.get_by_role("tab", name=FAVORITES_TAB_TEXT).first,
-                       page.get_by_text(FAVORITES_TAB_TEXT).first]
+        candidates = [page.locator(sel).first for sel in selectors]
+        candidates += [page.get_by_role("tab", name=text).first, page.get_by_text(text).first]
         for loc in candidates:
             try:
                 if loc.count() and loc.is_visible():
@@ -282,19 +290,12 @@ _API_PAGE_JS = """async ([tpl, cursor, sign]) => {
 }"""
 
 
-def _valid_page(payload) -> bool:
+def _valid_page(payload, key: str = "itemList") -> bool:
     return (isinstance(payload, dict) and payload.get("statusCode", 0) in (0, None)
-            and (isinstance(payload.get("itemList"), list) or payload.get("hasMore") is False))
+            and (isinstance(payload.get(key), list) or payload.get("hasMore") is False))
 
 
-def _collect(page, base: str, names: list[str], known: set[str], stop_on_known: bool,
-             progress: Callable[[str], None], max_minutes: float, interactive: bool,
-             on_username: Callable[[str], None],
-             on_page: Callable[[list[FavoriteMeta], object], int] = lambda favs, cur: 0,
-             resume_cursor: object = None, pace: tuple[float, float] = (0.4, 1.0)) -> SyncResult:
-    responses: list = []
-    page.on("response", lambda r: responses.append(r) if FAVORITES_API in r.url else None)
-
+def _captcha_waiter(page, interactive: bool, progress: Callable[[str], None]) -> Callable[[], None]:
     def wait_captcha() -> None:
         page.wait_for_timeout(1500)
         if not _has_captcha(page):
@@ -304,8 +305,87 @@ def _collect(page, base: str, names: list[str], known: set[str], stop_on_known: 
         progress("TikTok demande une vérification : résous-la dans la fenêtre.")
         page.wait_for_function(
             "sels => !sels.some(s => document.querySelector(s))", arg=list(CAPTCHA_SELECTORS), timeout=180_000)
+    return wait_captcha
 
-    username = _open_profile_favorites(page, base, names, wait_captcha)
+
+def _first_valid(page, responses: list, api: str, key: str = "itemList", timeout: float = 15,
+                 match: Callable[[str], bool] = lambda url: True):
+    """Attend la 1re réponse valide de ``api`` chargée par la page elle-même → (url, données) ou None."""
+    for _ in range(int(timeout)):
+        page.wait_for_timeout(1000)
+        for resp in list(responses):
+            if api not in resp.url or not match(resp.url):
+                continue
+            try:
+                payload = resp.json()
+            except Exception:  # noqa: BLE001
+                continue
+            if _valid_page(payload, key):
+                return resp.url, payload
+        if _has_captcha(page):
+            raise Blocked("TikTok demande une vérification (captcha).")
+    return None
+
+
+def _replay(page, template: str, cursor, handle: Callable[[dict], bool], deadline: float,
+            pace: tuple[float, float], key: str = "itemList") -> str:
+    """Pages suivantes en requêtes directes depuis la page. → "done", "failed" (refusé) ou "timeout"."""
+    sign = False
+    while time.monotonic() < deadline:
+        nxt = page.evaluate(_API_PAGE_JS, [template, cursor, sign])
+        if not _valid_page(nxt, key) and not sign:
+            sign = True  # 2e essai avec la signature explicite du site
+            nxt = page.evaluate(_API_PAGE_JS, [template, cursor, sign])
+        if not _valid_page(nxt, key):
+            log.info("requêtes directes refusées (%s)", str(nxt)[:200])
+            return "failed"
+        if handle(nxt):
+            return "done"
+        cursor = nxt.get("cursor")
+        page.wait_for_timeout(int(random.uniform(*pace) * 1000))
+    return "timeout"
+
+
+def _scroll(page, responses: list, api: str, handle: Callable[[dict], bool], deadline: float,
+            key: str = "itemList") -> bool:
+    """Repli : fait défiler la page et lit ce qu'elle charge. True si la fin de la liste est atteinte."""
+    idle = 0
+    while time.monotonic() < deadline:
+        page.mouse.wheel(0, 5000)
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(1500)
+        batch = [r for r in responses if api in r.url]
+        responses[:] = [r for r in responses if api not in r.url]
+        got = False
+        for resp in batch:
+            try:
+                payload = resp.json()
+            except Exception:  # noqa: BLE001 - réponse vide ou annulée
+                continue
+            if not _valid_page(payload, key):
+                continue
+            got = True
+            if handle(payload):
+                return True
+        if got:
+            idle = 0
+            continue
+        idle += 1
+        if _has_captcha(page):
+            raise Blocked("TikTok demande une vérification (captcha).")
+        if idle >= 8:  # ~15 s sans nouvelle page : fin de liste ou page bloquée
+            return False
+    return False
+
+
+def _collect(page, base: str, names: list[str], known: set[str], stop_on_known: bool,
+             progress: Callable[[str], None], max_minutes: float, interactive: bool,
+             on_username: Callable[[str], None],
+             on_page: Callable[[list[FavoriteMeta], object], int] = lambda favs, cur: 0,
+             resume_cursor: object = None, pace: tuple[float, float] = (0.4, 1.0)) -> SyncResult:
+    responses: list = []
+    page.on("response", lambda r: responses.append(r) if FAVORITES_API in r.url else None)
+    username = _open_profile_favorites(page, base, names, _captcha_waiter(page, interactive, progress))
     on_username(username)
     result = SyncResult(username)
     seen: set[str] = set()
@@ -325,21 +405,7 @@ def _collect(page, base: str, names: list[str], known: set[str], stop_on_known: 
         return bool(stop_on_known and items and all(f.item.video_id in known for f in items))
 
     # 1re page : celle que charge la page TikTok quand on clique sur l'onglet.
-    first = None
-    for _ in range(15):
-        page.wait_for_timeout(1000)
-        for resp in responses:
-            try:
-                payload = resp.json()
-            except Exception:  # noqa: BLE001
-                continue
-            if _valid_page(payload):
-                first = (resp.url, payload)
-                break
-        if first:
-            break
-        if _has_captcha(page):
-            raise Blocked("TikTok demande une vérification (captcha).")
+    first = _first_valid(page, responses, FAVORITES_API)
     if not first:
         raise Blocked("TikTok n'a renvoyé aucun favori (liste vide, ou page bloquée).")
     responses.clear()
@@ -351,50 +417,93 @@ def _collect(page, base: str, names: list[str], known: set[str], stop_on_known: 
     cursor = resume_cursor if (resume_cursor not in (None, "") and not stop_on_known) else payload.get("cursor")
     if cursor != payload.get("cursor"):
         progress("Reprise de la synchro précédente…")
-    sign = False
-    while time.monotonic() < deadline:
-        nxt = page.evaluate(_API_PAGE_JS, [template, cursor, sign])
-        if not _valid_page(nxt) and not sign:
-            sign = True  # 2e essai avec la signature explicite du site
-            nxt = page.evaluate(_API_PAGE_JS, [template, cursor, sign])
-        if not _valid_page(nxt):
-            log.info("requêtes directes refusées (%s), repli sur le défilement", str(nxt)[:200])
-            break
+    state = _replay(page, template, cursor, handle, deadline, pace)
+    if state != "failed":
         result.mode = "api"
-        if handle(nxt):
-            return result
-        cursor = nxt.get("cursor")
-        page.wait_for_timeout(int(random.uniform(*pace) * 1000))
-    else:
-        return result  # temps écoulé : la suite reprendra à la prochaine synchro
-
+        return result  # "done", ou "timeout" : la suite reprendra à la prochaine synchro
     # Repli : on fait défiler la page et on lit ce qu'elle charge.
     result.mode = "scroll"
-    idle = 0
-    while time.monotonic() < deadline:
-        page.mouse.wheel(0, 5000)
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        page.wait_for_timeout(1500)
-        batch, responses[:] = responses[:], []
-        got_page = False
-        for resp in batch:
-            try:
-                payload = resp.json()
-            except Exception:  # noqa: BLE001 - réponse vide ou annulée
-                continue
-            if not _valid_page(payload):
-                continue
-            got_page = True
-            if handle(payload):
-                return result
-        if got_page:
-            idle = 0
+    _scroll(page, responses, FAVORITES_API, handle, deadline)
+    return result
+
+
+def _items_template(list_template: str, collection_id: str) -> str:
+    """Adresse de la liste d'une collection, construite à partir de celle de la liste des collections
+    (mêmes paramètres de session) : secours si la page de la collection ne charge rien elle-même."""
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    u = urlsplit(list_template)
+    q = {k: v for k, v in parse_qsl(u.query) if k not in ("X-Bogus", "X-Gnarly", "_signature", "secUid")}
+    q.update({"collectionId": collection_id, "count": "30", "cursor": "0", "sourceType": "113"})
+    return urlunsplit((u.scheme, u.netloc, COLLECTION_ITEMS_API + "/", urlencode(q), ""))
+
+
+def _collect_collections(page, base: str, names: list[str], progress: Callable[[str], None], max_minutes: float,
+                         interactive: bool, on_username: Callable[[str], None], pace: tuple[float, float],
+                         on_collection: Callable[[str, str, list[FavoriteMeta], int], None]) -> SyncResult:
+    """Lit tes collections (Favoris → Collections) et les vidéos de chacune."""
+    from urllib.parse import quote
+
+    responses: list = []
+    page.on("response", lambda r: responses.append(r)
+            if COLLECTION_LIST_API in r.url or COLLECTION_ITEMS_API in r.url else None)
+    wait_captcha = _captcha_waiter(page, interactive, progress)
+    username = _open_profile_favorites(page, base, names, wait_captcha)
+    on_username(username)
+    result = SyncResult(username)
+    deadline = time.monotonic() + max_minutes * 60
+
+    tab = _find_tab(page, COLLECTIONS_TAB_TEXT, COLLECTIONS_TAB_SELECTORS, timeout=15)
+    if tab is None:
+        raise SyncError("Onglet « Collections » introuvable dans tes favoris (onglets vus : "
+                        f"{_visible_tabs(page) or 'aucun'}).")
+    tab.click()
+    first = _first_valid(page, responses, COLLECTION_LIST_API, key="collectionList")
+    if not first:
+        result.complete = True  # pas de collection (ou liste vide)
+        return result
+    list_template, payload = first
+    collections: list[dict] = []
+
+    def handle_list(p: dict) -> bool:
+        collections.extend(c for c in p.get("collectionList") or [] if isinstance(c, dict))
+        return not p.get("hasMore")
+
+    if not handle_list(payload) and _replay(page, list_template, payload.get("cursor"), handle_list, deadline,
+                                            pace, key="collectionList") != "done":
+        _scroll(page, responses, COLLECTION_LIST_API, handle_list, deadline, key="collectionList")
+
+    for i, coll in enumerate(collections):
+        cid = str(coll.get("collectionId") or coll.get("id") or "").strip()
+        name = str(coll.get("name") or "").strip() or "Sans nom"
+        if not cid or time.monotonic() > deadline:
             continue
-        idle += 1
-        if _has_captcha(page):
-            raise Blocked("TikTok demande une vérification (captcha).")
-        if idle >= 8:  # ~15 s sans nouvelle page : fin de liste ou page bloquée
-            return result
+        progress(f"Collection « {name} » ({i + 1}/{len(collections)})…")
+        favs: list[FavoriteMeta] = []
+        seen: set[str] = set()
+
+        def handle(p: dict) -> bool:
+            items, has_more = parse_item_list(p)
+            favs.extend(f for f in items if f.item.video_id not in seen)
+            seen.update(f.item.video_id for f in items)
+            return not has_more
+
+        responses.clear()
+        page.goto(f"{base}/@{username}/collection/{quote(name)}-{cid}", wait_until="domcontentloaded")
+        wait_captcha()
+        got = _first_valid(page, responses, COLLECTION_ITEMS_API, timeout=12, match=lambda url: cid in url)
+        if got:
+            done = handle(got[1]) or _replay(page, got[0], got[1].get("cursor"), handle, deadline, pace) == "done" \
+                or _scroll(page, responses, COLLECTION_ITEMS_API, handle, deadline)
+        else:
+            done = _replay(page, _items_template(list_template, cid), 0, handle, deadline, pace) == "done"
+        if not done and not favs:
+            log.warning("collection %s (%s) illisible", name, cid)
+            continue
+        on_collection(cid, name, favs, i)
+        result.favorites.extend(favs)
+        page.wait_for_timeout(int(random.uniform(*pace) * 1000))
+    result.complete = time.monotonic() <= deadline
     return result
 
 
@@ -414,8 +523,10 @@ def run(*, profile: Path, known: set[str], stop_on_known: bool, username: str = 
         debug_dir: Path | None = None, on_username: Callable[[str], None] = lambda n: None,
         on_session: Callable[[bool], None] = lambda ok: None,
         on_page: Callable[[list[FavoriteMeta], object], int] = lambda favs, cur: 0,
-        resume_cursor: object = None, pace: tuple[float, float] = (0.4, 1.0)) -> SyncResult:
-    """Ouvre le navigateur, (connexion si ``login``), puis lit les favoris."""
+        resume_cursor: object = None, pace: tuple[float, float] = (0.4, 1.0),
+        on_collection: Callable[[str, str, list[FavoriteMeta], int], None] | None = None) -> SyncResult:
+    """Ouvre le navigateur, (connexion si ``login``), puis lit les favoris (ou les collections si
+    ``on_collection`` est donné)."""
     if not is_available():
         raise SyncError("Playwright n'est pas installé : pip install playwright")
     from playwright.sync_api import sync_playwright
@@ -448,6 +559,9 @@ def run(*, profile: Path, known: set[str], stop_on_known: bool, username: str = 
                     page.wait_for_timeout(1500)
                 names = [username] if username else []  # @ forcé dans .env, ou trouvé la dernière fois
                 names += _username_candidates(page)
+                if on_collection is not None:
+                    return _collect_collections(page, base, names, progress, max_minutes, not headless or login,
+                                                on_username, pace, on_collection)
                 return _collect(page, base, names, known, stop_on_known, progress, max_minutes,
                                 interactive=not headless or login, on_username=on_username,
                                 on_page=on_page, resume_cursor=resume_cursor, pace=pace)
@@ -564,3 +678,36 @@ def sync_into_db(db, settings, *, login: bool = False, full: bool = False,
     finish(db, result)
     return {"username": result.username, "found": len(result.favorites), "added": result.added,
             "complete": result.complete, "mode": result.mode}
+
+
+def sync_collections_into_db(db, settings, *, progress: Callable[[str], None] = lambda m: None,
+                             base: str = TIKTOK, pace: tuple[float, float] = (0.4, 1.0)) -> dict:
+    """Tes collections TikTok deviennent des catégories (source « tiktok »), remplacées à chaque import."""
+    store_page = PageStore(db)
+    seen_ids: set[str] = set()
+    counts: dict[str, int] = {}
+
+    def on_collection(cid: str, name: str, favs: list[FavoriteMeta], position: int) -> None:
+        store_page(favs)  # au cas où une vidéo d'une collection ne serait pas encore dans les favoris
+        cat = db.upsert_category(name, "tiktok", cid, "Collections TikTok", [], position)
+        db.set_category_members(cat, [(f.item.video_id, None) for f in favs])
+        seen_ids.add(cid)
+        counts[name] = len(favs)
+
+    opts = dict(profile=default_profile_dir(), known=set(), stop_on_known=False,
+                username=settings.tiktok_username or db.kv_get(KV_USERNAME) or "", channel=settings.browser,
+                base=base, progress=progress, debug_dir=settings.tmp_dir,
+                on_username=lambda n: db.kv_set(KV_USERNAME, n),
+                on_session=lambda ok: db.kv_set(KV_SESSION, "1") if ok else db.kv_delete(KV_SESSION),
+                pace=pace, on_collection=on_collection)
+    headless = settings.browser_headless
+    try:
+        result = run(headless=headless, **opts)
+    except Blocked:
+        if not headless:
+            raise
+        progress("TikTok demande une vérification : une fenêtre s'ouvre.")
+        result = run(headless=False, **opts)
+    if result.complete:
+        db.delete_categories("tiktok", keep_external_ids=seen_ids)  # collections supprimées sur TikTok
+    return {"username": result.username, "collections": counts, "complete": result.complete}

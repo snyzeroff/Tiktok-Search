@@ -76,6 +76,25 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
 -- Données d'une publication lues dans la liste des favoris, en attendant l'indexation
 -- (évite d'ouvrir la page de chaque vidéo ; les liens qu'elles contiennent expirent en quelques heures).
 CREATE TABLE IF NOT EXISTS item_cache (video_id TEXT PRIMARY KEY, data TEXT NOT NULL, fetched_at REAL);
+
+-- Catégories : collections TikTok (source « tiktok ») ou tri automatique (source « auto »).
+CREATE TABLE IF NOT EXISTS categories (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    external_id TEXT NOT NULL DEFAULT '',
+    set_name    TEXT DEFAULT '',
+    keywords    TEXT DEFAULT '[]',
+    position    INTEGER DEFAULT 0,
+    UNIQUE (source, external_id)
+);
+CREATE TABLE IF NOT EXISTS video_categories (
+    video_id    TEXT NOT NULL,
+    category_id INTEGER NOT NULL,
+    score       REAL,
+    PRIMARY KEY (video_id, category_id)
+);
+CREATE INDEX IF NOT EXISTS idx_video_categories_cat ON video_categories (category_id);
 """
 
 FTS_VERSION = "2"
@@ -214,11 +233,15 @@ class Database:
             ).fetchall()
         return [dict(r) for r in rows]
 
-    def list_videos(self, limit: int = 50, offset: int = 0, kind: str | None = None) -> list[dict]:
+    def list_videos(self, limit: int = 50, offset: int = 0, kind: str | None = None,
+                    category: int | None = None) -> list[dict]:
         sql, params = "SELECT * FROM videos WHERE status = 'done'", []
         if kind:
             sql += " AND kind = ?"
             params.append(kind)
+        if category:
+            sql += " AND id IN (SELECT video_id FROM video_categories WHERE category_id = ?)"
+            params.append(category)
         sql += " ORDER BY favorited_at DESC, updated_at DESC LIMIT ? OFFSET ?"
         with self.connect() as conn:
             return [_video_dict(r) for r in conn.execute(sql, (*params, limit, offset))]
@@ -325,6 +348,61 @@ class Database:
         with self.connect() as conn:
             return {r[0] for r in conn.execute(
                 f"SELECT id FROM videos WHERE status = ? AND id IN ({','.join('?' * len(ids))})", (status, *ids))}
+
+    # --- catégories -------------------------------------------------------------
+
+    def upsert_category(self, name: str, source: str, external_id: str, set_name: str = "",
+                        keywords: list[str] | None = None, position: int = 0) -> int:
+        with self._write_lock, self.connect() as conn:
+            conn.execute(
+                "INSERT INTO categories (name, source, external_id, set_name, keywords, position) VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (source, external_id) DO UPDATE SET name = excluded.name, set_name = excluded.set_name, "
+                "keywords = excluded.keywords, position = excluded.position",
+                (name, source, external_id, set_name, json.dumps(keywords or [], ensure_ascii=False), position))
+            return conn.execute("SELECT id FROM categories WHERE source = ? AND external_id = ?",
+                                (source, external_id)).fetchone()[0]
+
+    def set_category_members(self, category_id: int, members: list[tuple[str, float | None]]) -> None:
+        """Remplace les vidéos d'une catégorie par ``[(video_id, score)]``."""
+        with self._write_lock, self.connect() as conn:
+            conn.execute("DELETE FROM video_categories WHERE category_id = ?", (category_id,))
+            conn.executemany("INSERT OR REPLACE INTO video_categories (video_id, category_id, score) VALUES (?, ?, ?)",
+                             [(vid, category_id, score) for vid, score in members])
+
+    def delete_categories(self, source: str, keep_external_ids: set[str] | None = None) -> int:
+        """Supprime les catégories d'une source (sauf ``keep_external_ids``) et leurs liens."""
+        with self._write_lock, self.connect() as conn:
+            rows = [r[0] for r in conn.execute("SELECT id, external_id FROM categories WHERE source = ?", (source,))
+                    if keep_external_ids is None or r[1] not in keep_external_ids]
+            for cid in rows:
+                conn.execute("DELETE FROM video_categories WHERE category_id = ?", (cid,))
+                conn.execute("DELETE FROM categories WHERE id = ?", (cid,))
+            return len(rows)
+
+    def list_categories(self) -> list[dict]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT c.*, (SELECT COUNT(*) FROM video_categories vc JOIN videos v ON v.id = vc.video_id "
+                "             WHERE vc.category_id = c.id AND v.status = 'done') AS count "
+                "FROM categories c ORDER BY c.source DESC, c.position, c.name COLLATE NOCASE").fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["keywords"] = json.loads(d.get("keywords") or "[]")
+            out.append(d)
+        return out
+
+    def categories_for(self, ids: list[str]) -> dict[str, list[dict]]:
+        out: dict[str, list[dict]] = {i: [] for i in ids}
+        if not ids:
+            return out
+        with self.connect() as conn:
+            for r in conn.execute(
+                    f"SELECT vc.video_id, c.id, c.name, c.source FROM video_categories vc "
+                    f"JOIN categories c ON c.id = vc.category_id WHERE vc.video_id IN ({','.join('?' * len(ids))}) "
+                    f"ORDER BY c.source DESC, c.position", ids):
+                out[r["video_id"]].append({"id": r["id"], "name": r["name"], "source": r["source"]})
+        return out
 
     # --- cache des données de la liste des favoris ----------------------------
 

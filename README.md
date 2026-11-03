@@ -21,8 +21,29 @@ plusieurs publications pour en extraire outils, sites, produits, comptes, étape
 - 📸 **Smart screens** : au lieu d'envoyer la vidéo à l'IA, on garde seulement les captures *réellement
   différentes* (empreinte perceptuelle), réduites à 768 px.
 
+## Catégories
+
+Bouton **« Trier en catégories »** sous la recherche, puis la liste « Toutes les catégories » pour filtrer
+(la recherche marche aussi à l'intérieur d'une catégorie). Chaque vidéo affiche ses catégories ; un clic
+sur l'une d'elles ouvre toute la catégorie.
+
+- **Mes collections TikTok** : les dossiers créés dans TikTok (Favoris → Collections) deviennent des
+  catégories avec les mêmes vidéos (compte connecté nécessaire). À relancer après avoir rangé de nouvelles
+  vidéos sur TikTok ; une collection supprimée sur TikTok disparaît au prochain import.
+- **Tri automatique** : « Proposer des catégories » donne plusieurs jeux, par exemple *Thèmes* (cuisine,
+  sport, tech…), *Usage* (tutoriels, produits, outils…), *Tes hashtags* (tirés de tes hashtags les plus
+  fréquents) et, si l'IA est configurée, 3 jeux inventés pour ta bibliothèque, en **une seule requête**.
+  Renomme, ajoute ou retire des catégories et des mots-clés, regarde l'**aperçu** (nombre de vidéos par
+  catégorie et exemples), puis **applique**. Le rangement se fait en local avec l'index de recherche
+  (légende, hashtags, transcription, texte à l'écran) : instantané et gratuit, même pour 15 000 vidéos.
+  Ce qui ne correspond à rien va dans « Autre ».
+
+En ligne de commande : `tiktok-search collections`, `tiktok-search categorize --list`,
+`tiktok-search categorize --set themes` (aperçu) puis `--apply`.
+
 ## Interface
 
+- **Affichage en liste ou en cases** (bouton à droite au-dessus des résultats, mémorisé).
 - **Frise des moments** sous chaque résultat : la durée de la vidéo, avec un repère jaune à chaque
   correspondance (rond = mot prononcé, carré = texte à l'écran). Un clic ouvre la vidéo au bon moment.
   Pour un carrousel, les pages contenant la recherche sont surlignées.
@@ -161,6 +182,7 @@ tiktok_search/
   transcribe.py    faster-whisper avec horodatage (optionnel)
   ocr.py           Tesseract (optionnel)
   analyze.py       extraction locale + IA (Gemini / Ollama), cache, fusion multi-vidéos, export
+  categorize.py    tri automatique : propositions de catégories, aperçu, rangement par mots-clés
   pipeline.py      orchestration de l'indexation
   db.py            SQLite + FTS5 (vidéos, segments horodatés, analyses), migration auto
   search.py        requêtes, BM25, extraits surlignés, timecodes/pages correspondants
