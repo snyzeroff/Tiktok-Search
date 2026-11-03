@@ -74,11 +74,10 @@
   .searchbox { display: flex; align-items: center; gap: 6px; background: var(--surface); border: 1.5px solid var(--line); border-radius: var(--r-l); padding: 6px 6px 6px 16px; box-shadow: var(--shadow-pop); }
   .searchbox:focus-within { border-color: var(--accent); }
   .searchbox svg { width: 22px; height: 22px; color: var(--faint); flex: none; }
+  .searchbox .tip { margin-right: 6px; }
   .searchbox input { flex: 1; min-width: 0; border: 0; background: none; outline: none; font-size: 21px; padding: 10px 4px; }
   .searchbox input::placeholder { color: var(--faint); }
   .searchbox input::-webkit-search-cancel-button { display: none; }
-  .hint { margin: 10px 2px 0; font-size: 13.5px; color: var(--muted); }
-  .hint code { font-family: inherit; background: var(--sunk); border-radius: 4px; padding: 0 5px; color: var(--ink); }
 
   .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-top: 16px; }
   .seg-ctl { display: inline-flex; background: var(--sunk); border-radius: var(--r-m); padding: 3px; }
@@ -97,7 +96,7 @@
   /* ---------- résultats ---------- */
   .results-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; padding: 14px 2px 8px; border-bottom: 1px solid var(--line); }
   .results-head h2 { font-size: 15px; font-weight: 600; margin: 0; }
-  .legend { display: inline-flex; gap: 14px; font-size: 13px; color: var(--muted); }
+  .legend { display: flex; gap: 14px; margin: 6px 0; }
   .legend i { display: inline-block; width: 10px; height: 10px; background: var(--hit); box-shadow: 0 0 0 1px rgba(0,0,0,.2); border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
   .legend i.sq { border-radius: 2px; }
   .list { list-style: none; margin: 0; padding: 0; }
@@ -202,7 +201,7 @@
   .an-foot { font-size: 13px; color: var(--faint); margin-top: 12px; }
   .warn-box { background: color-mix(in srgb, var(--danger) 10%, var(--surface)); border-radius: var(--r-m); padding: 10px 12px; font-size: 14px; margin-bottom: 14px; }
   .info-box { background: var(--sunk); border-radius: var(--r-m); padding: 10px 12px; font-size: 14px; margin-bottom: 14px; color: var(--muted); }
-  .runrow { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .runrow { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; align-items: center; }
 
   .report { width: min(860px, 100vw - 24px); max-height: calc(100vh - 24px); border-radius: var(--r-l); }
   .report .body { padding: 20px 22px 26px; }
@@ -229,7 +228,19 @@
   .msg { min-height: 20px; font-size: 14px; margin-top: 8px; }
 
   .toast { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); z-index: 30; background: var(--ink); color: var(--paper); padding: 9px 16px; border-radius: var(--r-m); font-weight: 600; font-size: 14.5px; box-shadow: var(--shadow-pop); }
-  footer { padding: 40px 0 120px; color: var(--faint); font-size: 13px; }
+  main#results { padding-bottom: 120px; }
+
+  /* bulle d'aide « ? » : survol sur ordinateur, toucher sur iPad/mobile */
+  .tip { position: relative; display: inline-flex; vertical-align: middle; }
+  .tip-btn { width: 22px; height: 22px; flex: none; border-radius: 50%; border: 1.5px solid var(--line); background: var(--surface); color: var(--muted); font-size: 12.5px; font-weight: 700; line-height: 1; padding: 0; cursor: pointer; display: inline-grid; place-items: center; }
+  .tip-btn:hover, .tip.open .tip-btn { border-color: var(--accent); color: var(--accent); }
+  .tip-bubble { position: absolute; z-index: 20; top: calc(100% + 10px); left: 50%; transform: translateX(-50%); width: max-content; max-width: min(300px, calc(100vw - 32px)); background: var(--ink); color: var(--paper); border-radius: var(--r-m); padding: 10px 12px; font-size: 13.5px; font-weight: 400; line-height: 1.45; text-align: left; box-shadow: var(--shadow-pop); visibility: hidden; opacity: 0; transition: opacity .12s, visibility .12s; pointer-events: none; }
+  .tip-bubble::before { content: ""; position: absolute; top: -5px; left: var(--arrow, 50%); margin-left: -5px; width: 10px; height: 10px; background: var(--ink); transform: rotate(45deg); border-radius: 2px; }
+  .tip-bubble b { display: block; margin-bottom: 3px; font-weight: 650; }
+  .tip-bubble code { font-family: inherit; background: rgba(255,255,255,.14); border-radius: 4px; padding: 0 4px; }
+  .tip.open .tip-bubble, .tip:focus-within .tip-bubble { visibility: visible; opacity: 1; pointer-events: auto; }
+  @media (hover: hover) { .tip:hover .tip-bubble { visibility: visible; opacity: 1; pointer-events: auto; } }
+  .drawer h3 { display: flex; align-items: center; gap: 8px; }
 
   @media (max-width: 760px) {
     .dlg-body { grid-template-columns: minmax(0, 1fr); padding: 14px; } .player { position: static; }
@@ -260,9 +271,9 @@
     <form id="search" class="searchbox" role="search">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
       <input type="search" id="q" placeholder="Un mot, un outil, une phrase entendue…" autocomplete="off" aria-label="Rechercher dans mes favoris" autofocus>
+      <span class="tip end"><button type="button" class="tip-btn" aria-label="Astuce" aria-expanded="false">?</button><span class="tip-bubble" role="tooltip"><b>Astuce</b><code>"plan de travail"</code> cherche l'expression exacte.<br><code>-pub</code> exclut un mot.<br><code>/</code> ramène ici depuis n'importe où.</span></span>
       <button class="btn" type="submit">Rechercher</button>
     </form>
-    <p class="hint">Astuces : <code>"plan de travail"</code> pour une expression exacte, <code>-pub</code> pour exclure, <code>/</code> pour revenir ici.</p>
     <div class="filters" id="filters">
       <div class="seg-ctl" id="kindCtl" role="group" aria-label="Type">
         <button type="button" data-kind="" aria-pressed="true">Tout</button>
@@ -278,7 +289,6 @@
   </section>
 
   <main id="results" aria-live="polite"></main>
-  <footer>Tout reste sur ton ordinateur. Les analyses IA ne partent que quand tu les demandes.</footer>
 </div>
 
 <div class="selbar" id="selbar" hidden>
@@ -321,22 +331,19 @@
     <div class="progress" id="progressbar" hidden><div></div></div>
     <div id="jobline" class="small"></div>
 
-    <h3>Importer l'export TikTok</h3>
-    <p>Dans TikTok : Profil, Paramètres et confidentialité, Compte, Télécharger tes données, au format JSON. Dépose ensuite le fichier ici.</p>
+    <h3>Importer l'export TikTok <span class="tip start"><button type="button" class="tip-btn" aria-label="Astuce" aria-expanded="false">?</button><span class="tip-bubble" role="tooltip"><b>Astuce</b>Dans TikTok : Profil, Paramètres et confidentialité, Compte, Télécharger tes données, format JSON. Dépose ensuite le .zip reçu ici.</span></span></h3>
     <form id="upload">
       <label class="file-pick" id="filePick"><input type="file" name="file" accept=".json,.zip,.txt" required><span id="fileLabel">Choisir le .zip ou le .json…</span></label>
       <div class="actions"><label class="tgl small"><input type="checkbox" name="likes" value="true"> Inclure les vidéos likées</label><span style="flex:1"></span><button class="btn" type="submit">Importer</button></div>
     </form>
 
-    <h3>Coller des liens</h3>
-    <p>Un lien de vidéo ou de carrousel par ligne. Les liens courts du bouton Partager fonctionnent.</p>
+    <h3>Coller des liens <span class="tip start"><button type="button" class="tip-btn" aria-label="Astuce" aria-expanded="false">?</button><span class="tip-bubble" role="tooltip"><b>Astuce</b>Un lien de vidéo ou de carrousel par ligne. Les liens courts du bouton Partager fonctionnent aussi.</span></span></h3>
     <form id="links">
       <textarea name="text" rows="3" placeholder="https://www.tiktok.com/@compte/video/7300000000000000000"></textarea>
       <div class="actions"><button class="btn" type="submit">Ajouter</button></div>
     </form>
 
-    <h3>Connecter mon compte</h3>
-    <p>Import automatique par l'API officielle de TikTok, réservé à l'Europe. L'export prend quelques heures.</p>
+    <h3>Connecter mon compte <span class="tip start"><button type="button" class="tip-btn" aria-label="Astuce" aria-expanded="false">?</button><span class="tip-bubble" role="tooltip"><b>Astuce</b>Import automatique par l'API officielle de TikTok, réservé à l'Europe. TikTok met quelques heures à préparer l'export : clique ensuite sur « Vérifier l'export ».</span></span></h3>
     <div class="actions"><a class="btn quiet" href="/auth/tiktok/login">Connecter TikTok</a><button class="btn bare" id="sync" type="button">Vérifier l'export</button></div>
 
     <h3>Entretien</h3>
@@ -357,6 +364,28 @@ const fmt = t => t == null ? "" : `${Math.floor(t / 60)}:${String(Math.floor(t %
 const toast = m => { const d = Object.assign(document.createElement("div"), { className: "toast", textContent: m, role: "status" }); document.body.append(d); setTimeout(() => d.remove(), 2200); };
 const fmtDate = s => { if (!s) return ""; const d = new Date(s.replace(" ", "T")); return isNaN(d) ? s : d.toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" }); };
 const plural = (n, w) => `${n} ${w}${n > 1 ? "s" : ""}`;
+const tip = (body, align = "") => `<span class="tip${align ? " " + align : ""}"><button type="button" class="tip-btn" aria-label="Astuce" aria-expanded="false">?</button><span class="tip-bubble" role="tooltip"><b>Astuce</b>${body}</span></span>`;
+// Bulles « ? » : un toucher ouvre/ferme (iPad, mobile), toucher ailleurs ou Échap ferme.
+document.addEventListener("click", e => {
+  const btn = e.target.closest(".tip-btn");
+  document.querySelectorAll(".tip.open").forEach(t => { if (!btn || t !== btn.parentElement) { t.classList.remove("open"); t.querySelector(".tip-btn").setAttribute("aria-expanded", "false"); } });
+  if (btn) { e.preventDefault(); e.stopPropagation(); const t = btn.parentElement; placeTip(t); const open = t.classList.toggle("open"); btn.setAttribute("aria-expanded", open); if (!open) btn.blur(); }
+}, true);
+document.addEventListener("keydown", e => { if (e.key === "Escape") document.querySelectorAll(".tip.open").forEach(t => t.classList.remove("open")); });
+// Place la bulle sous le « ? » en la gardant entière dans l'écran ou la fenêtre qui la contient.
+function placeTip(t) {
+  const b = t.querySelector(".tip-bubble"), btn = t.querySelector(".tip-btn");
+  b.style.left = "0px"; b.style.transform = "none";
+  const box = (t.closest("dialog[open]") || document.documentElement).getBoundingClientRect();
+  const minX = Math.max(box.left, 0) + 8, maxX = Math.min(box.right, window.innerWidth) - 8;
+  const br = btn.getBoundingClientRect(), w = b.offsetWidth, tr = t.getBoundingClientRect();
+  const center = br.left + br.width / 2;
+  const left = Math.min(Math.max(center - w / 2, minX), Math.max(minX, maxX - w));
+  b.style.left = (left - tr.left) + "px";
+  b.style.setProperty("--arrow", Math.min(Math.max(center - left, 12), w - 12) + "px");
+}
+document.addEventListener("mouseover", e => { const t = e.target.closest?.(".tip"); if (t && !t.contains(e.relatedTarget)) placeTip(t); });
+document.addEventListener("focusin", e => { const t = e.target.closest?.(".tip"); if (t) placeTip(t); });
 let labels = {}, features = {}, lastResults = [], selected = new Set(), lastQuery = "", refreshTimer = null, searchSeq = 0, pageSize = 50, hasMore = false, kindFilter = "";
 
 // ---------- thème ----------
@@ -491,12 +520,12 @@ function renderResults(q, from = 0) {
   const res = lastResults;
   if (!res.length) {
     $("#results").innerHTML = q
-      ? `<div class="empty"><h3>Rien trouvé pour « ${esc(q)} »</h3><p>Essaie un mot plus court, coche « Au moins un des mots », ou retire un filtre.</p></div>`
-      : `<div class="empty"><h3>Commence par ajouter tes favoris</h3><p>Importe l'export de tes données TikTok ou colle quelques liens. Chaque vidéo devient cherchable jusque dans ce qui y est dit.</p><button class="btn" type="button" onclick="document.getElementById('drawer').showModal()">Ajouter mes favoris</button></div>`;
+      ? `<div class="empty"><h3>Rien trouvé pour « ${esc(q)} »</h3><p>Essaie un mot plus court ou « Au moins un des mots ».</p></div>`
+      : `<div class="empty"><h3>Commence par ajouter tes favoris</h3><button class="btn" type="button" onclick="document.getElementById('drawer').showModal()">Ajouter mes favoris</button></div>`;
     return;
   }
   const head = `<div class="results-head"><h2>${q ? `${res.length}${hasMore ? "+" : ""} résultat${res.length > 1 ? "s" : ""}` : "Ajoutés récemment"}</h2>
-    ${q ? `<span class="legend"><span><i></i>prononcé</span><span><i class="sq"></i>à l'écran</span></span>` : ""}</div>`;
+    ${q ? tip(`Sur la frise, chaque repère est un passage trouvé : <span class="legend"><span><i></i>prononcé</span><span><i class="sq"></i>à l'écran</span></span>Clique dessus pour y aller.`, "end") : ""}</div>`;
   const rows = res.map((v, idx) => {
     const hits = v.hits || [];
     const len = v.kind === "photo" ? `${v.images.length} p.` : (v.duration ? fmt(v.duration) : "");
@@ -649,7 +678,7 @@ function renderPlayer() {
     $("#player").innerHTML = n ? `<div class="carousel"><a id="imglink" target="_blank" rel="noopener"><img id="pageimg" alt=""></a>
       <button class="nav prev" type="button" onclick="goTo('page:'+(cur.page-1))" aria-label="Page précédente">‹</button><button class="nav next" type="button" onclick="goTo('page:'+(cur.page+1))" aria-label="Page suivante">›</button></div>
       <div class="pages-strip">${v.images.map((_, i) => `<button type="button" data-page="${i + 1}" class="${hitPages.has(i + 1) ? "hit" : ""}" onclick="goTo('page:${i + 1}')">${i + 1}</button>`).join("")}</div>
-      <p class="note">Les flèches du clavier tournent les pages.</p>`
+`
       : `<p class="muted">Les images de ce carrousel ne sont pas disponibles.</p>`;
     if (n) goTo("page:1");
   } else if (v.media_path) {
@@ -657,7 +686,7 @@ function renderPlayer() {
     $("#vid").addEventListener("timeupdate", syncActive);
   } else {
     $("#player").innerHTML = `<iframe id="ttplayer" title="Lecteur TikTok" allow="autoplay; fullscreen; encrypted-media" src="https://www.tiktok.com/player/v1/${encodeURIComponent(v.id)}?autoplay=1&music_info=0&description=0&rel=0&native_context_menu=0"></iframe>
-      <p class="note">Si le saut au bon moment ne marche pas, active TTS_KEEP_VIDEO pour lire la vidéo en local.</p>`;
+      <p class="note">${tip("Si la vidéo ne saute pas au bon moment, active <code>TTS_KEEP_VIDEO=on</code> : elle sera lue en local, avec un saut toujours précis.", "start")}</p>`;
   }
 }
 
@@ -730,7 +759,8 @@ function showTab(tab) {
     $("#tabbody").innerHTML = `<div class="runrow">
         <button class="btn an-run" type="button" data-mode="text">Analyser le texte</button>
         <button class="btn quiet an-run" type="button" data-mode="screens">Analyser avec les captures</button>
-      </div><div id="anbox">${cur.analysis ? "" : `<p class="muted">L'analyse liste les outils, sites, produits, comptes et étapes de cette publication, avec le moment où ils apparaissent. ${features.llm !== "none" ? `Le texte seul coûte quelques milliers de tokens (${esc(features.llm_model)}).` : "Sans IA configurée, seuls les liens et codes trouvés dans le texte sont listés."}</p>`}</div>`;
+        ${tip(`Liste les outils, sites, produits, comptes et étapes, avec le moment où ils apparaissent.<br>${features.llm !== "none" ? `« Texte » est le moins cher. « Captures » envoie en plus quelques images clés à ${esc(features.llm_model)}.` : "Sans IA configurée, seuls les liens et codes trouvés dans le texte sont listés."}`, "end")}
+      </div><div id="anbox"></div>`;
     document.querySelectorAll(".an-run").forEach(b => b.onclick = () => runAnalysis([v.id], b.dataset.mode, false, $("#anbox")));
     if (cur.analysis) runAnalysis([v.id], cur.analysis.mode, false, $("#anbox"), true);   // affichage seul, jamais facturé
   } else {
