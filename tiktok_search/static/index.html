@@ -353,6 +353,9 @@
     <div class="actions"><a class="btn quiet" href="/auth/tiktok/login">Connecter l'API</a><button class="btn bare" id="sync" type="button">Vérifier l'export</button></div>
     </div>
 
+    <h3>Indexation <span class="tip start"><button type="button" class="tip-btn" aria-label="Astuce" aria-expanded="false">?</button><span class="tip-bubble" role="tooltip"><b>Astuce</b>Traite uniquement ce qui n'est pas encore fait : les favoris jamais indexés, puis les transcriptions en attente. Rien n'est refait pour les vidéos déjà indexées.</span></span></h3>
+    <div class="actions"><button class="btn" type="button" id="processPending">Indexer les vidéos en attente</button></div>
+
     <h3>Entretien</h3>
     <div class="actions"><button class="btn quiet" type="button" id="retry">Réessayer les échecs</button><button class="btn bare" type="button" id="reindex">Tout réindexer</button></div>
     <p class="msg" id="msg" role="status"></p>
@@ -445,7 +448,11 @@ async function refresh() {
       <div><b>${s.total}</b><span>favoris</span></div><div><b>${s.done}</b><span>indexés</span></div><div><b>${s.analysed}</b><span>analysés</span></div>
       <div><b>${s.videos}</b><span>vidéos</span></div><div><b>${s.carousels}</b><span>carrousels</span></div><div><b>${s.with_transcript}</b><span>transcrits</span></div>
     </div>
-    <p class="small muted" style="margin:6px 0 0">${s.pending ? `${s.pending} en attente. ` : ""}${s.media_pending ? `${s.media_pending} transcriptions à faire (déjà cherchables par la légende). ` : ""}${s.error ? `${s.error} en échec. ` : ""}${s.unavailable ? `${s.unavailable} supprimés ou privés.` : ""}</p>`;
+    <p class="small muted" style="margin:6px 0 0">${s.pending ? `${s.pending} en attente. ` : ""}${s.media_pending ? `${plural(s.media_pending, "transcription")} à faire (déjà cherchable${s.media_pending > 1 ? "s" : ""} par la légende). ` : ""}${s.error ? `${s.error} en échec. ` : ""}${s.unavailable ? `${s.unavailable} supprimés ou privés.` : ""}</p>`;
+  const todo = s.pending + s.media_pending;
+  const pb = $("#processPending");
+  pb.disabled = j.running || !todo;
+  pb.textContent = j.running ? "Indexation en cours…" : todo ? `Indexer les vidéos en attente (${todo})` : "Tout est indexé";
   $("#progressbar").hidden = !j.running;
   $("#progressbar div").style.width = pct + "%";
   $("#jobline").innerHTML = (j.running ? `${j.phase === "media" ? "Transcription des vidéos sans sous-titres" : "Indexation des légendes et sous-titres"}, ${pct} %. <button class="btn bare" id="cancelJob" type="button">Arrêter</button> ` : "") + esc(j.message);
@@ -850,6 +857,7 @@ fileInput.onchange = () => $("#fileLabel").textContent = fileInput.files[0]?.nam
 $("#search").onsubmit = doSearch;
 $("#upload").onsubmit = e => { e.preventDefault(); post("/api/import", new FormData(e.target)); };
 $("#links").onsubmit = e => { e.preventDefault(); post("/api/links", new FormData(e.target)); };
+$("#processPending").onclick = () => post("/api/process");
 $("#retry").onclick = () => post("/api/process?retry_errors=true");
 $("#reindex").onclick = () => confirm("Tout réindexer ? Les infos de chaque favori seront téléchargées à nouveau.") && post("/api/reindex");
 $("#sync").onclick = () => post("/api/tiktok/sync");

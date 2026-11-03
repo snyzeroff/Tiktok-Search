@@ -265,3 +265,14 @@ def test_whisper_falls_back_to_cpu_when_cuda_libs_missing(monkeypatch, tmp_path)
     with pytest.raises(RuntimeError):  # une vraie erreur n'est pas masquée
         monkeypatch.setattr(transcribe, "_run", lambda *a: (_ for _ in ()).throw(RuntimeError("fichier illisible")))
         transcribe.transcribe_segments(tmp_path / "x.mp4", device="cpu")
+
+
+def test_process_endpoint_only_handles_videos_not_yet_indexed(db, settings, whisper, monkeypatch):
+    """« Indexer les vidéos en attente » : rien n'est refait pour les vidéos déjà indexées."""
+    db.add_favorite("deja", "u")
+    db.save_video("deja", status="done", description="déjà indexée")
+    db.add_favorite("nouvelle", "u")
+    client = NoPage()
+    pipeline.process_all(db, settings, client_factory=lambda: client)
+    assert client.fetched == ["nouvelle"]
+    assert db.get_video("deja")["description"] == "déjà indexée"
