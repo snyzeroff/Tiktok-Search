@@ -452,7 +452,7 @@ async function refresh() {
   $("#cancelJob")?.addEventListener("click", () => post("/api/process/cancel"));
   const yes = (on, label, off) => `<span class="${on ? "on" : "off"}">${on ? label : off}</span>`;
   $("#features").innerHTML = `
-    <li>Transcription (Whisper) ${yes(f.whisper, "activée", "non installée")}</li>
+    <li>Transcription (Whisper) ${yes(f.whisper, esc(f.whisper_engine), "non installée")}</li>
     <li>Texte à l'écran (OCR) ${yes(f.ocr, "activé", "désactivé")}</li>
     <li>ffmpeg ${yes(f.ffmpeg, "trouvé", "introuvable")}</li>
     <li>Analyse IA ${yes(f.llm !== "none", esc(f.llm_model), "extraction locale seule")}</li>

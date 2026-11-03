@@ -123,7 +123,7 @@ def ocr_screens(shots: list[screens.Screen], lang: str) -> list[dict]:
 def _media_needs(settings: Settings, has_transcript: bool, has_ocr: bool) -> tuple[bool, bool]:
     """(transcrire avec Whisper ?, OCR ?) pour une vidéo. Whisper lit le MP4 lui-même : seul l'OCR
     (captures d'écran) a besoin de ffmpeg."""
-    need_whisper = settings.transcribe == "auto" and not has_transcript and transcribe.is_available()
+    need_whisper = settings.transcribe == "auto" and not has_transcript and transcribe.available(settings)
     do_ocr = settings.ocr and not has_ocr and ocr.is_available() and ffmpeg_available()
     return need_whisper, do_ocr
 
@@ -159,8 +159,7 @@ def _media_work(settings: Settings, client: TikTokPageClient, vid: str, play_url
         if need_whisper:
             try:
                 with _whisper_lock:
-                    segs = transcribe.transcribe_segments(video_path, settings.whisper_model, settings.whisper_lang,
-                                                          settings.whisper_threads, settings.whisper_device)
+                    segs = transcribe.transcribe_for(settings, video_path, work)
                 segments += [{"kind": "transcript", **s} for s in segs]
             except Exception as e:  # noqa: BLE001
                 warnings.append(f"transcription échouée : {e}"[:120])

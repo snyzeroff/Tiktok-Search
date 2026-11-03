@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from functools import lru_cache
 from pathlib import Path
+
+from . import whispercpp
+
+log = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
@@ -92,3 +97,48 @@ def transcribe_segments(media_path: Path, model_name: str = "small", language: s
             raise
         _cpu_only = True
         return _run(media_path, model_name, language, threads, "cpu")
+
+
+# --- choix du moteur ------------------------------------------------------------------
+
+_whispercpp_broken = ""  # raison, si whisper.cpp est installé mais inutilisable
+
+
+def engine(settings) -> str:
+    """« whispercpp » (carte graphique AMD/Intel/NVIDIA via Vulkan) ou « faster-whisper »."""
+    if settings.whisper_engine == "faster-whisper" or _whispercpp_broken:
+        return "faster-whisper"
+    if settings.whisper_engine in ("auto", "whispercpp") and whispercpp.find_server(settings.whispercpp_dir):
+        return "whispercpp"
+    return "faster-whisper"
+
+
+def available(settings) -> bool:
+    return engine(settings) == "whispercpp" or is_available()
+
+
+def transcribe_for(settings, media_path: Path, work_dir: Path) -> list[dict]:
+    """Transcrit avec le meilleur moteur disponible ; si whisper.cpp ne démarre pas, repli sur
+    faster-whisper (processeur) au lieu d'échouer à chaque vidéo."""
+    global _whispercpp_broken
+    if engine(settings) == "whispercpp":
+        try:
+            return whispercpp.transcribe(
+                media_path, server_dir=settings.whispercpp_dir, model=settings.whispercpp_model,
+                models_dir=settings.data_dir / "models", work_dir=work_dir, language=settings.whisper_lang,
+                log_dir=settings.data_dir)
+        except whispercpp.WhisperCppUnavailable as e:
+            if not is_available():
+                raise
+            _whispercpp_broken = str(e)
+            log.warning("whisper.cpp inutilisable (%s) : repli sur faster-whisper", e)
+    return transcribe_segments(media_path, settings.whisper_model, settings.whisper_lang,
+                               settings.whisper_threads, settings.whisper_device)
+
+
+def engine_label(settings) -> str:
+    if engine(settings) == "whispercpp":
+        return f"carte graphique (whisper.cpp, {settings.whispercpp_model})"
+    if _whispercpp_broken:
+        return f"processeur ({settings.whisper_model}) — whisper.cpp : {_whispercpp_broken}"[:160]
+    return f"{'auto' if settings.whisper_device == 'auto' else settings.whisper_device} ({settings.whisper_model})"

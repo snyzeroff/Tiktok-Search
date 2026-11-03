@@ -1,0 +1,76 @@
+# Compile whisper.cpp avec Vulkan pour Windows (cartes AMD Radeon, Intel Arc, NVIDIA).
+# whisper.cpp ne publie pas de version Vulkan pour Windows : ce workflow la construit et la publie
+# dans les Releases du dépôt (« whisper-vulkan-x64.zip »), à décompresser dans le dossier
+# « whisper-vulkan » du projet.
+name: whisper.cpp Vulkan (Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    paths: [".github/workflows/whisper-vulkan.yml"]
+
+permissions:
+  contents: write
+
+env:
+  WHISPER_CPP_REF: v1.9.5
+  VULKAN_VERSION: 1.4.309.0
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ggml-org/whisper.cpp
+          ref: ${{ env.WHISPER_CPP_REF }}
+
+      - name: Installer le SDK Vulkan
+        shell: pwsh
+        run: |
+          curl.exe -fsSL -o "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_VERSION.exe"
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          if ($LASTEXITCODE -ne 0) { throw "installation du SDK Vulkan échouée ($LASTEXITCODE)" }
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\$env:VULKAN_VERSION"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$env:VULKAN_VERSION\bin"
+
+      - name: Compiler
+        shell: pwsh
+        run: |
+          cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DGGML_VULKAN=ON `
+                -DGGML_NATIVE=OFF -DWHISPER_BUILD_TESTS=OFF
+          cmake --build build --config Release -j 4 --target whisper-server whisper-cli
+          Get-ChildItem build/bin/Release
+
+      - name: Vérifier
+        shell: pwsh
+        run: |
+          foreach ($f in "whisper-server.exe", "whisper-cli.exe", "ggml-vulkan.dll") {
+            if (-not (Test-Path "build/bin/Release/$f")) { throw "$f manquant" }
+          }
+          & build/bin/Release/whisper-cli.exe --help | Select-Object -First 5
+
+      - name: Empaqueter
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory whisper-vulkan | Out-Null
+          Copy-Item build/bin/Release/*.exe, build/bin/Release/*.dll whisper-vulkan/
+          Copy-Item LICENSE whisper-vulkan/LICENSE-whisper.cpp.txt
+          Compress-Archive whisper-vulkan/* whisper-vulkan-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whisper-vulkan-x64
+          path: whisper-vulkan-x64.zip
+
+      - name: Publier dans les Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: whisper-vulkan-${{ env.WHISPER_CPP_REF }}
+          name: whisper.cpp ${{ env.WHISPER_CPP_REF }} — Vulkan, Windows x64
+          body: |
+            whisper.cpp ${{ env.WHISPER_CPP_REF }} compilé avec Vulkan pour Windows (cartes AMD Radeon, Intel Arc, NVIDIA).
+            Décompresser `whisper-vulkan-x64.zip` dans le dossier `whisper-vulkan` du projet TikTok Search.
+            Licence MIT de whisper.cpp incluse.
+          files: whisper-vulkan-x64.zip
+          make_latest: false

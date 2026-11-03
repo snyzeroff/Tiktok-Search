@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import analyze, browser_sync, importer, ocr, pipeline, tiktok_oauth, transcribe
+from . import analyze, browser_sync, importer, ocr, pipeline, tiktok_oauth, transcribe, whispercpp
 from .config import get_settings
 from .db import FTS_COLUMNS, Database
 from .search import FIELD_LABELS, search, segment_hits
@@ -92,6 +92,7 @@ async def lifespan(_app):
     if settings.auto_sync and _sync_due():
         _start_account_sync()
     yield
+    whispercpp.shutdown()
 
 
 app = FastAPI(title="TikTok Search", lifespan=lifespan)
@@ -168,7 +169,8 @@ def status() -> dict:
         "stats": db.stats(),
         "job": job.as_dict(),
         "features": {
-            "whisper": settings.transcribe == "auto" and transcribe.is_available(),
+            "whisper": settings.transcribe == "auto" and transcribe.available(settings),
+            "whisper_engine": transcribe.engine_label(settings),
             "ocr": settings.ocr and ocr.is_available(),
             "tiktok_oauth": bool(settings.tiktok_client_key),
             "tiktok_connected": tiktok_oauth.is_connected(db),

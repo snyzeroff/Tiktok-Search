@@ -37,6 +37,11 @@ class Settings:
     whisper_model: str = field(default_factory=lambda: os.getenv("TTS_WHISPER_MODEL", "small"))
     whisper_lang: str = field(default_factory=lambda: os.getenv("TTS_WHISPER_LANG", "").strip().lower())
     whisper_threads: int = field(default_factory=lambda: max(0, _num("TTS_WHISPER_THREADS", 0, int)))
+    # Moteur : auto (whisper.cpp sur la carte graphique s'il est installé, sinon faster-whisper),
+    # whispercpp, faster-whisper
+    whisper_engine: str = field(default_factory=lambda: os.getenv("TTS_WHISPER_ENGINE", "auto").strip().lower() or "auto")
+    whispercpp_dir: str = field(default_factory=lambda: os.getenv("TTS_WHISPERCPP_DIR", "") or "whisper-vulkan")
+    whispercpp_model: str = field(default_factory=lambda: os.getenv("TTS_WHISPERCPP_MODEL", "") or "large-v3-turbo-q5_0")
     whisper_device: str = field(default_factory=lambda: os.getenv("TTS_WHISPER_DEVICE", "auto").strip().lower() or "auto")
     ocr: bool = field(default_factory=lambda: _bool("TTS_OCR", False))
     ocr_lang: str = field(default_factory=lambda: os.getenv("TTS_OCR_LANG", "fra+eng"))

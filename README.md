@@ -209,6 +209,13 @@ Pour aller plus vite :
   images) sont réutilisées, **sans ouvrir la page de chaque vidéo** : seuls les fichiers sont téléchargés
   depuis le CDN. Mesuré sur 15 800 favoris simulés : 5 s d'enregistrement, 15 s de traitement par l'app
   (hors téléchargements), recherche en 38 ms.
+- **Carte AMD Radeon / Intel Arc (Windows)** : faster-whisper ne les utilise pas, mais **whisper.cpp + Vulkan**
+  oui. Télécharger `whisper-vulkan-x64.zip` dans les *Releases* du dépôt (compilé par le workflow
+  `.github/workflows/whisper-vulkan.yml`), le décompresser dans un dossier `whisper-vulkan` à la racine du projet,
+  relancer l'app : la carte est utilisée automatiquement, avec le modèle `large-v3-turbo` (plus précis que `small`,
+  ≈ 550 Mo téléchargés au 1er usage dans `data/models`). Le serveur whisper.cpp reste lancé, le modèle n'est
+  chargé qu'une fois. S'il ne démarre pas, l'app repasse sur faster-whisper (processeur) ; le panneau « Moteurs »
+  indique ce qui est utilisé, et le journal est dans `data/whisper-server.log`.
 - **Whisper** reste l'étape longue. Avec une **carte NVIDIA**, il l'utilise tout seul (`TTS_WHISPER_DEVICE=auto`) :
   installer les bibliothèques CUDA avec `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`. Sinon, sur CPU,
   `TTS_WHISPER_MODEL=base` est ≈ 3× plus rapide. Les favoris les plus récents sont transcrits en premier,

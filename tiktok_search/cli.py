@@ -95,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "process":
         if args.all:
             print(f"{db.reset_all()} vidéos remises en attente.")
-        print(f"Transcription Whisper : {'oui' if transcribe.is_available() and settings.transcribe == 'auto' else 'non'}"
+        print(f"Transcription Whisper : {transcribe.engine_label(settings) if transcribe.available(settings) and settings.transcribe == 'auto' else 'non'}"
               f" · OCR : {'oui' if settings.ocr and ocr.is_available() else 'non'}")
 
         if settings.ocr and not pipeline.ffmpeg_available():
