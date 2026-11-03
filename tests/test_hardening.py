@@ -309,3 +309,19 @@ def test_auth_token(client, monkeypatch):
     assert c.get("/api/status").status_code == 401
     assert c.get("/api/status?token=secret").status_code == 200
     assert c.get("/api/status").status_code == 200  # cookie posé
+
+
+def test_netstat_parsing_any_windows_language():
+    from tiktok_search.cli import parse_netstat_pid
+
+    out = """
+Connexions actives
+
+  Proto  Adresse locale         Adresse distante       État
+  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1104
+  TCP    127.0.0.1:8000         127.0.0.1:52011        ESTABLISHED     4242
+  TCP    127.0.0.1:8000         0.0.0.0:0              ABHÖREN         36876
+  TCP    127.0.0.1:18000        0.0.0.0:0              LISTENING       7
+"""
+    assert parse_netstat_pid(out, 8000) == 36876
+    assert parse_netstat_pid(out, 9000) is None

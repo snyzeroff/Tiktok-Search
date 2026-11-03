@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 
 from . import analyze, browser_sync, importer, ocr, pipeline, transcribe
@@ -152,8 +153,98 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "serve":
         import uvicorn
 
-        uvicorn.run("tiktok_search.web:app", host=args.host, port=args.port)
+        port = prepare_port(args.host, args.port)
+        if port is None:
+            return 1
+        print(f"→ http://localhost:{port}" if args.host in ("127.0.0.1", "localhost") else f"→ http://{args.host}:{port}")
+        uvicorn.run("tiktok_search.web:app", host=args.host, port=port)
     return 0
+
+
+# --- port du serveur --------------------------------------------------------------
+
+def port_free(host: str, port: int) -> bool:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
+def is_tiktok_search(host: str, port: int) -> bool:
+    import httpx
+
+    try:
+        data = httpx.get(f"http://{'127.0.0.1' if host in ('0.0.0.0', '') else host}:{port}/api/status", timeout=3).json()
+    except Exception:  # noqa: BLE001
+        return False
+    return isinstance(data, dict) and "stats" in data and "job" in data
+
+
+def parse_netstat_pid(output: str, port: int) -> int | None:
+    """PID qui écoute sur ``port`` dans la sortie de ``netstat -ano`` (Windows)."""
+    for line in output.splitlines():
+        parts = line.split()
+        # En écoute = adresse distante 0.0.0.0:0 (l'intitulé LISTENING dépend de la langue de Windows).
+        if len(parts) >= 5 and parts[0].upper() == "TCP" and parts[1].rsplit(":", 1)[-1] == str(port) \
+                and parts[2] in ("0.0.0.0:0", "[::]:0") and parts[-1].isdigit():
+            return int(parts[-1])
+    return None
+
+
+def listening_pid(port: int) -> int | None:
+    import subprocess
+
+    try:
+        if sys.platform == "win32":
+            out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True, timeout=10).stdout
+            return parse_netstat_pid(out, port)
+        out = subprocess.run(["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"], capture_output=True, text=True,
+                             timeout=10).stdout.split()
+        return int(out[0]) if out else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def stop_pid(pid: int) -> None:
+    import os
+    import signal
+    import subprocess
+
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True, timeout=10)
+    else:
+        os.kill(pid, signal.SIGTERM)
+
+
+def prepare_port(host: str, port: int) -> int | None:
+    """Port à utiliser. Si une ancienne TikTok Search l'occupe (fenêtre oubliée, ancienne version),
+    on l'arrête pour la remplacer ; si c'est un autre programme, on prend le port libre suivant."""
+    import time
+
+    if port_free(host, port):
+        return port
+    if is_tiktok_search(host, port):
+        pid = listening_pid(port)
+        if pid and pid != os.getpid():
+            print(f"Une autre TikTok Search tournait déjà sur le port {port} (PID {pid}) : arrêt pour la remplacer.")
+            stop_pid(pid)
+            for _ in range(50):
+                if port_free(host, port):
+                    return port
+                time.sleep(0.2)
+        print(f"TikTok Search tourne déjà sur http://localhost:{port} et n'a pas pu être arrêtée.\n"
+              f"Ferme l'autre fenêtre (Ctrl+C), ou lance : tiktok-search serve --port {port + 1}", file=sys.stderr)
+        return None
+    for other in range(port + 1, port + 20):
+        if port_free(host, other):
+            print(f"Le port {port} est pris par un autre programme : utilisation du port {other}.")
+            return other
+    print(f"Aucun port libre entre {port} et {port + 19}.", file=sys.stderr)
+    return None
 
 
 if __name__ == "__main__":
