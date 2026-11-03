@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TikTok Search</title>
+<style>
+  :root { --bg:#0f0f12; --card:#1a1a20; --muted:#8b8b98; --text:#f2f2f5; --accent:#fe2c55; --accent2:#25f4ee; --mark:#fe2c5540; --border:#2a2a33; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:920px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:28px; margin:0 0 4px; } h1 span { color:var(--accent); }
+  .sub { color:var(--muted); margin:0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px; margin-bottom:16px; }
+  .searchbar { display:flex; gap:8px; }
+  input[type=search], textarea { flex:1; background:#0b0b0e; border:1px solid var(--border); color:var(--text); border-radius:10px; padding:12px 14px; font-size:16px; width:100%; }
+  button, .btn { background:var(--accent); color:#fff; border:0; border-radius:10px; padding:10px 16px; font-weight:600; cursor:pointer; text-decoration:none; display:inline-block; font-size:14px; }
+  button.secondary, .btn.secondary { background:#2a2a33; }
+  .filters { display:flex; flex-wrap:wrap; gap:12px; margin-top:12px; color:var(--muted); font-size:14px; }
+  .filters label { display:flex; gap:6px; align-items:center; cursor:pointer; }
+  .stats { display:flex; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:14px; }
+  .stats b { color:var(--text); }
+  details summary { cursor:pointer; font-weight:600; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:12px; }
+  .result { display:flex; gap:14px; }
+  .thumb { width:84px; height:112px; flex:none; border-radius:8px; background:#222 center/cover; }
+  .result h3 { margin:0 0 4px; font-size:15px; } .result h3 a { color:var(--accent2); text-decoration:none; }
+  .desc { color:var(--muted); font-size:14px; margin:0 0 6px; overflow-wrap:anywhere; }
+  .match { font-size:14px; margin:4px 0; overflow-wrap:anywhere; }
+  .tag { display:inline-block; font-size:11px; text-transform:uppercase; letter-spacing:.04em; background:#2a2a33; color:var(--muted); border-radius:6px; padding:1px 6px; margin-right:6px; }
+  mark { background:var(--mark); color:var(--text); border-radius:3px; padding:0 2px; }
+  .muted { color:var(--muted); } .progress { height:6px; background:#2a2a33; border-radius:4px; overflow:hidden; margin-top:8px; }
+  .progress div { height:100%; background:var(--accent2); width:0; transition:width .4s; }
+  @media (max-width:560px) { .thumb { width:64px; height:86px; } .searchbar { flex-direction:column; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>TikTok <span>Search</span></h1>
+  <p class="sub">Retrouve n'importe quelle vidéo de tes favoris grâce à sa légende, ses hashtags, ce qui y est dit ou écrit à l'écran.</p>
+
+  <div class="card">
+    <form id="search" class="searchbar">
+      <input type="search" id="q" placeholder='ex : recette pâtes  ·  "plan de travail"  ·  #astuce -pub' autofocus>
+      <button>Rechercher</button>
+    </form>
+    <div class="filters" id="filters"></div>
+  </div>
+
+  <div class="card">
+    <div class="stats" id="stats">Chargement…</div>
+    <div class="progress" id="progressbar" hidden><div></div></div>
+    <details style="margin-top:12px">
+      <summary>Ajouter mes favoris</summary>
+      <p class="muted">Option 1 — <b>Connecter mon compte TikTok</b> (API Data Portability, Europe uniquement, l'export peut prendre quelques heures) :</p>
+      <div class="row"><a class="btn" id="connect" href="/auth/tiktok/login">Connecter TikTok</a>
+        <button class="secondary" id="sync" type="button">Vérifier / importer l'export</button></div>
+      <p class="muted">Option 2 — <b>Importer l'export</b> : dans TikTok → Paramètres → Compte → Télécharger tes données → format <b>JSON</b>, puis dépose le fichier (.zip ou .json) ici :</p>
+      <form id="upload" class="row">
+        <input type="file" name="file" accept=".json,.zip" required>
+        <label class="muted"><input type="checkbox" name="likes" value="true"> inclure les likes</label>
+        <button>Importer</button>
+      </form>
+      <p class="muted">Option 3 — <b>Coller des liens</b> de vidéos (un par ligne) :</p>
+      <form id="links">
+        <textarea name="text" rows="3" placeholder="https://www.tiktok.com/@user/video/7300000000000000000"></textarea>
+        <div class="row"><button>Ajouter</button>
+          <button class="secondary" type="button" id="retry">Relancer les vidéos en erreur</button></div>
+      </form>
+      <p class="muted" id="msg"></p>
+    </details>
+  </div>
+
+  <div id="results"></div>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => (s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const hl = s => esc(s).replaceAll("\x02", "<mark>").replaceAll("\x03", "</mark>");
+let labels = {};
+
+async function refresh() {
+  const r = await fetch("/api/status").then(r => r.json());
+  labels = r.fields;
+  if (!$("#filters").childElementCount) {
+    $("#filters").innerHTML = '<span>Chercher dans :</span>' + Object.entries(labels).map(([k, v]) =>
+      `<label><input type="checkbox" name="field" value="${k}" checked> ${esc(v)}</label>`).join("")
+      + '<label><input type="checkbox" id="any"> au moins un des mots</label>';
+  }
+  const s = r.stats, j = r.job, f = r.features;
+  $("#stats").innerHTML = `<span><b>${s.total}</b> vidéos</span><span><b>${s.done}</b> indexées</span>
+    <span><b>${s.with_transcript}</b> avec transcription</span><span><b>${s.pending}</b> en attente</span>
+    <span><b>${s.error}</b> en erreur</span>
+    <span>Whisper : ${f.whisper ? "✅" : "—"} · OCR : ${f.ocr ? "✅" : "—"} · TikTok : ${f.tiktok_connected ? "connecté ✅" : (f.tiktok_oauth ? "non connecté" : "non configuré")}</span>`;
+  $("#progressbar").hidden = !j.running;
+  if (j.running) $("#progressbar div").style.width = (100 * j.done / Math.max(1, j.total)) + "%";
+  setTimeout(refresh, j.running ? 2000 : 10000);
+}
+
+async function doSearch(e) {
+  e?.preventDefault();
+  const q = $("#q").value.trim();
+  if (!q) { $("#results").innerHTML = ""; return; }
+  const p = new URLSearchParams({ q });
+  const boxes = [...document.querySelectorAll('input[name=field]')];
+  if (boxes.some(b => !b.checked)) boxes.filter(b => b.checked).forEach(b => p.append("field", b.value));
+  if ($("#any")?.checked) p.set("any", "true");
+  history.replaceState(null, "", "?q=" + encodeURIComponent(q));
+  const r = await fetch("/api/search?" + p).then(r => r.json());
+  $("#results").innerHTML = `<p class="muted">${r.results.length} résultat(s)</p>` + r.results.map(v => `
+    <div class="card result">
+      <a class="thumb" href="${esc(v.url)}" target="_blank" rel="noopener" style="background-image:url('${esc(v.thumbnail)}')"></a>
+      <div>
+        <h3><a href="${esc(v.url)}" target="_blank" rel="noopener">@${esc(v.author || "inconnu")}</a>
+          <span class="muted" style="font-weight:400">${esc(v.favorited_at)}</span></h3>
+        ${v.matches.description ? "" : `<p class="desc">${esc((v.description || "").slice(0, 160))}</p>`}
+        ${Object.entries(v.matches).map(([k, s]) => `<p class="match"><span class="tag">${esc(labels[k] || k)}</span>${hl(s)}</p>`).join("")}
+      </div>
+    </div>`).join("");
+}
+
+async function post(url, body) {
+  const r = await fetch(url, { method: "POST", body });
+  const j = await r.json();
+  $("#msg").textContent = r.ok ? (j.found !== undefined ? `${j.found} vidéo(s) trouvée(s), ${j.added} nouvelle(s). Indexation en cours…` : JSON.stringify(j)) : (j.detail || "Erreur");
+  refresh();
+}
+
+$("#search").onsubmit = doSearch;
+$("#filters").onchange = () => $("#q").value && doSearch();
+$("#upload").onsubmit = e => { e.preventDefault(); post("/api/import", new FormData(e.target)); };
+$("#links").onsubmit = e => { e.preventDefault(); post("/api/links", new FormData(e.target)); };
+$("#retry").onclick = () => post("/api/process?retry_errors=true");
+$("#sync").onclick = () => post("/api/tiktok/sync");
+const initial = new URLSearchParams(location.search).get("q");
+refresh().then(() => { if (initial) { $("#q").value = initial; doSearch(); } });
+</script>
+</body>
+</html>
