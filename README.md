@@ -74,26 +74,57 @@ cp .env.example .env                  # puis ajuster si besoin
 tiktok-search serve                   # → http://localhost:8000
 ```
 
-`ffmpeg` doit être installé pour la transcription et l'OCR.
+Sous **Windows** (invite de commandes) :
+
+```bat
+py -m venv .venv
+.venv\Scripts\activate
+pip install -e ".[transcription]"
+copy .env.example .env
+tiktok-search serve
+```
+
+`ffmpeg` doit être installé pour la transcription et l'OCR (Windows : `winget install Gyan.FFmpeg`).
+La synchro du compte utilise Edge ou Chrome déjà installés ; sinon : `playwright install chromium`.
 
 ## Récupérer ses favoris
 
-TikTok **ne donne pas accès aux favoris via son API publique classique**. Trois façons sont prévues :
+### Connecter son compte (recommandé) : synchro automatique
 
-1. **Importer l'export TikTok** (marche pour tout le monde, aujourd'hui) :
-   TikTok → Profil → ☰ → Paramètres et confidentialité → Compte → *Télécharger tes données* →
-   format **JSON** → *Demander les données*. Quand le fichier est prêt (quelques heures à quelques jours),
-   dépose le `.zip` dans l'interface ou :
+Dans l'interface : **Mes favoris → Se connecter à TikTok**. Une fenêtre de navigateur (Edge sur Windows,
+sinon Chrome) s'ouvre sur tiktok.com : connecte-toi comme d'habitude. Le **QR code** avec l'appli TikTok
+du téléphone est le plus simple. La connexion Google marche aussi, sauf si Google refuse le navigateur
+piloté : dans ce cas, utilise le QR code. La fenêtre se ferme toute seule et **tous tes favoris sont importés**.
+
+Ensuite, **à chaque ouverture de l'app** (au plus une fois toutes les 15 min), les nouveaux favoris sont
+récupérés en arrière-plan, sans fenêtre, puis indexés. Si TikTok demande une vérification (captcha), une
+fenêtre s'ouvre pour que tu la résolves.
+
+Comment ça marche (`tiktok_search/browser_sync.py`) : le navigateur ouvre ton profil, onglet « Favoris »,
+fait défiler la liste et lit les réponses que la page TikTok reçoit elle-même
+(`/api/user/collect/item_list/`). La session reste dans un profil de navigateur dédié, **sur ton
+ordinateur uniquement** (`%LOCALAPPDATA%\tiktok-search\browser-profile` sous Windows) ; « Se déconnecter »
+le supprime. Après la première synchro complète, on s'arrête dès qu'une page ne contient plus rien de
+nouveau. « Tout relire » refait une lecture complète.
+
+En ligne de commande :
+```bash
+tiktok-search login          # fenêtre de connexion, puis import de tous les favoris
+tiktok-search sync           # nouveaux favoris seulement   (--full : tout relire, --show : voir la fenêtre)
+```
+En cas d'échec, une capture de la page est enregistrée dans `data/tmp/sync-debug.png`.
+
+### Autres méthodes
+
+1. **Importer l'export TikTok** : TikTok → Profil → ☰ → Paramètres et confidentialité → Compte →
+   *Télécharger tes données* → format **JSON**. Dépose le `.zip` dans l'interface ou :
    ```bash
    tiktok-search import ~/Téléchargements/TikTok_Data.zip   # --likes pour inclure les vidéos likées
    ```
-2. **Connecter son compte TikTok** (bouton « Connecter TikTok ») via la *Data Portability API* :
-   c'est la seule voie officielle et automatisée. Elle est réservée aux utilisateurs de l'**EEE / Royaume-Uni**
-   et nécessite une application approuvée sur [developers.tiktok.com](https://developers.tiktok.com)
-   (renseigner `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET`). L'export est asynchrone : après connexion,
-   cliquer plus tard sur « Vérifier / importer l'export ». Voir `tiktok_search/tiktok_oauth.py` —
-   les endpoints sont à valider contre la doc TikTok avant production.
-3. **Coller des liens** de vidéos, un par ligne (`tiktok-search links liens.txt`).
+2. **Coller des liens** de vidéos, un par ligne (`tiktok-search links liens.txt`).
+3. **API officielle** (*Data Portability API*, EEE / Royaume-Uni) : nécessite une application approuvée sur
+   [developers.tiktok.com](https://developers.tiktok.com) (`TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET`).
+   Le bloc n'apparaît dans l'interface que si ces clés sont renseignées. Voir `tiktok_search/tiktok_oauth.py`.
 
 ## Ligne de commande
 
@@ -121,6 +152,7 @@ par le lecteur du navigateur.
 
 ```
 tiktok_search/
+  browser_sync.py  synchro des favoris par un vrai navigateur (Playwright) : connexion, lecture, incrémental
   importer.py      lecture de l'export TikTok (JSON/zip, plusieurs formats) et des liens
   tiktok_oauth.py  Login Kit OAuth + Data Portability API
   tiktok_page.py   lecture de la page TikTok : vidéo ou carrousel, sous-titres horodatés, images
@@ -145,7 +177,6 @@ transcription sont supprimées juste après traitement.
 - **Questions en langage naturel** sur ses favoris (« la vidéo où un coach montre un exercice pour le dos »).
 - Analyse automatique en tâche de fond de tous les favoris (en respectant les quotas gratuits).
 - **Multi-utilisateurs** (comptes, une base par utilisateur) pour un déploiement en ligne.
-- Synchronisation périodique automatique des nouveaux favoris.
 
 > ⚠️ Respecte les conditions d'utilisation de TikTok : l'outil est conçu pour un usage personnel sur
 > ses propres favoris. Le téléchargement via yt-dlp peut casser quand TikTok modifie son site

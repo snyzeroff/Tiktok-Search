@@ -6,6 +6,8 @@ import hmac
 import logging
 import os
 import threading
+import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -13,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import analyze, importer, ocr, pipeline, tiktok_oauth, transcribe
+from . import analyze, browser_sync, importer, ocr, pipeline, tiktok_oauth, transcribe
 from .config import get_settings
 from .db import FTS_COLUMNS, Database
 from .search import FIELD_LABELS, search, segment_hits
@@ -28,7 +30,70 @@ MAX_UPLOAD = 1024 * 1024 * 1024  # 1 Go
 ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"} | {
     h.strip().lower() for h in os.getenv("TTS_ALLOWED_HOSTS", "").split(",") if h.strip()}
 
-app = FastAPI(title="TikTok Search")
+
+
+class AccountJob:
+    """Synchro des favoris par le navigateur, en tâche de fond."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.running = False
+        self.message = ""
+        self.error = False
+
+    def as_dict(self) -> dict:
+        return {"running": self.running, "message": self.message, "error": self.error,
+                **browser_sync.account_state(db, browser_sync.default_profile_dir())}
+
+
+account = AccountJob()
+
+
+def _start_account_sync(login: bool = False, full: bool = False) -> bool:
+    with account.lock:
+        if account.running:
+            return False
+        account.running, account.error = True, False
+        account.message = "Ouverture du navigateur…"
+
+    def progress(msg: str) -> None:
+        account.message = msg
+
+    def run() -> None:
+        try:
+            r = browser_sync.sync_into_db(db, settings, login=login, full=full, progress=progress)
+            account.message = (f"{r['added']} nouveaux favoris importés." if r["added"]
+                               else "Tes favoris sont à jour.")
+            if r["added"]:
+                _start_processing()
+        except browser_sync.SyncError as e:
+            account.message, account.error = str(e), True
+        except Exception as e:  # noqa: BLE001
+            log.exception("synchro des favoris interrompue")
+            account.message, account.error = f"Synchro interrompue : {e}", True
+        finally:
+            account.running = False
+
+    threading.Thread(target=run, daemon=True, name="synchro-favoris").start()
+    return True
+
+
+def _sync_due() -> bool:
+    state = browser_sync.account_state(db, browser_sync.default_profile_dir())
+    if not (state["available"] and state["has_session"] and state["username"]):
+        return False
+    return not state["last_sync"] or time.time() - state["last_sync"] >= settings.sync_interval_min * 60
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    # À chaque ouverture de l'app : nouveaux favoris récupérés automatiquement.
+    if settings.auto_sync and _sync_due():
+        _start_account_sync()
+    yield
+
+
+app = FastAPI(title="TikTok Search", lifespan=lifespan)
 app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 _oauth_states: list[str] = []
@@ -106,11 +171,13 @@ def status() -> dict:
             "ocr": settings.ocr and ocr.is_available(),
             "tiktok_oauth": bool(settings.tiktok_client_key),
             "tiktok_connected": tiktok_oauth.is_connected(db),
+            "browser_sync": browser_sync.is_available(),
             "llm": settings.llm_provider if settings.llm_provider in analyze.PROVIDERS else "none",
             "llm_model": analyze.model_name(settings),
             "keep_video": settings.keep_video,
             "ffmpeg": pipeline.ffmpeg_available(),
         },
+        "account": account.as_dict(),
         "fields": FIELD_LABELS,
     }
 
@@ -243,7 +310,37 @@ def api_analyze_export(ids: str = Query(..., max_length=10000), format: str = "m
                              headers={"Content-Disposition": 'attachment; filename="analyse-tiktok.md"'})
 
 
-# --- Connexion TikTok ---------------------------------------------------------
+# --- Compte TikTok par le navigateur ------------------------------------------
+
+@app.post("/api/account/login")
+def account_login() -> dict:
+    """Ouvre une fenêtre de navigateur sur ton ordinateur pour te connecter à TikTok."""
+    if not browser_sync.is_available():
+        raise HTTPException(400, "Playwright n'est pas installé : pip install playwright")
+    return {"started": _start_account_sync(login=True)}
+
+
+@app.post("/api/account/sync")
+def account_sync(full: bool = False, auto: bool = False) -> dict:
+    """``auto`` : appelé à l'ouverture de la page, ne fait rien si la dernière synchro est récente."""
+    if auto and not (settings.auto_sync and _sync_due()):
+        return {"started": False, "skipped": True}
+    if not browser_sync.account_state(db, browser_sync.default_profile_dir())["has_session"]:
+        raise HTTPException(400, "Connecte d'abord ton compte TikTok.")
+    return {"started": _start_account_sync(full=full)}
+
+
+@app.post("/api/account/logout")
+def account_logout() -> dict:
+    if account.running:
+        raise HTTPException(409, "Une synchro est en cours, réessaie dans un instant.")
+    browser_sync.forget_session(browser_sync.default_profile_dir())
+    db.kv_delete(browser_sync.KV_USERNAME, browser_sync.KV_LAST_SYNC, browser_sync.KV_FULL_DONE)
+    account.message, account.error = "Déconnecté. Tes favoris déjà importés restent dans l'index.", False
+    return {"ok": True}
+
+
+# --- Connexion TikTok (API officielle) -----------------------------------------
 
 @app.get("/auth/tiktok/login")
 def tiktok_login() -> RedirectResponse:

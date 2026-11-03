@@ -1,4 +1,4 @@
-"""Interface en ligne de commande : tiktok-search import|links|process|search|stats|serve."""
+"""Interface en ligne de commande : tiktok-search login|sync|import|links|process|search|stats|serve."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import argparse
 import logging
 import sys
 
-from . import analyze, importer, ocr, pipeline, transcribe
+from . import analyze, browser_sync, importer, ocr, pipeline, transcribe
 from .config import get_settings
 from .db import Database
 from .search import FIELD_LABELS, MARK_CLOSE, MARK_OPEN, search
@@ -28,6 +28,11 @@ def main(argv: list[str] | None = None) -> int:
 
     s = sub.add_parser("links", help="Importer une liste de liens (fichier texte, un lien par ligne)")
     s.add_argument("file")
+
+    sub.add_parser("login", help="Se connecter à TikTok dans une fenêtre de navigateur, puis récupérer les favoris")
+    s = sub.add_parser("sync", help="Récupérer les nouveaux favoris du compte connecté")
+    s.add_argument("--full", action="store_true", help="Relire toute la liste des favoris")
+    s.add_argument("--show", action="store_true", help="Afficher la fenêtre du navigateur")
 
     s = sub.add_parser("process", help="Récupérer légendes, transcriptions et texte à l'écran")
     s.add_argument("--retry-errors", action="store_true")
@@ -73,6 +78,19 @@ def main(argv: list[str] | None = None) -> int:
             items = importer.parse_links_text(importer.resolve_short_links(f.read()))
         added = pipeline.import_items(db, items, "links")
         print(f"{len(items)} liens reconnus, {added} nouveaux.")
+    elif args.cmd in ("login", "sync"):
+        if args.cmd == "sync" and args.show:
+            settings.browser_headless = False
+        try:
+            r = browser_sync.sync_into_db(db, settings, login=args.cmd == "login",
+                                          full=getattr(args, "full", False), progress=print)
+        except browser_sync.SyncError as e:
+            print(f"Synchro impossible : {e}", file=sys.stderr)
+            print(f"(capture de la page : {settings.tmp_dir / 'sync-debug.png'})", file=sys.stderr)
+            return 1
+        print(f"@{r['username']} : {r['found']} favoris lus, {r['added']} nouveaux.")
+        if r["added"]:
+            print("Lance maintenant : tiktok-search process")
     elif args.cmd == "process":
         if args.all:
             print(f"{db.reset_all()} vidéos remises en attente.")

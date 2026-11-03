@@ -48,6 +48,12 @@ class Settings:
     ollama_url: str = field(default_factory=lambda: os.getenv("OLLAMA_URL", "http://localhost:11434"))
     ollama_model: str = field(default_factory=lambda: os.getenv("OLLAMA_MODEL", "qwen2.5vl:7b"))
     analysis_max_screens: int = field(default_factory=lambda: max(1, min(30, _num("TTS_MAX_SCREENS", 8, int))))
+    # Synchro des favoris par le navigateur (Playwright)
+    browser: str = field(default_factory=lambda: os.getenv("TTS_BROWSER", "auto"))  # auto | msedge | chrome | chromium
+    browser_headless: bool = field(default_factory=lambda: _bool("TTS_BROWSER_HEADLESS", True))
+    auto_sync: bool = field(default_factory=lambda: _bool("TTS_AUTO_SYNC", True))
+    sync_interval_min: float = field(default_factory=lambda: max(0.0, _num("TTS_SYNC_INTERVAL_MIN", 15, float)))
+    tiktok_username: str = field(default_factory=lambda: os.getenv("TTS_TIKTOK_USERNAME", "").lstrip("@").strip())
     tiktok_client_key: str = field(default_factory=lambda: os.getenv("TIKTOK_CLIENT_KEY", ""))
     tiktok_client_secret: str = field(default_factory=lambda: os.getenv("TIKTOK_CLIENT_SECRET", ""))
     tiktok_redirect_uri: str = field(

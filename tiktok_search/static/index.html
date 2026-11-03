@@ -44,6 +44,7 @@
   mark { background: var(--hit); color: var(--hit-ink); border-radius: 3px; padding: 0 .12em; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
   .num { font-variant-numeric: tabular-nums; }
   .muted { color: var(--muted); } .small { font-size: 13.5px; }
+  .warn-text { color: var(--danger); }
   .wrap { max-width: 920px; margin: 0 auto; padding: 0 16px; }
 
   /* boutons */
@@ -331,6 +332,10 @@
     <div class="progress" id="progressbar" hidden><div></div></div>
     <div id="jobline" class="small"></div>
 
+    <h3>Mon compte TikTok <span class="tip start"><button type="button" class="tip-btn" aria-label="Astuce" aria-expanded="false">?</button><span class="tip-bubble" role="tooltip"><b>Astuce</b>Une fenêtre de navigateur s'ouvre sur ton ordinateur : connecte-toi comme d'habitude (le QR code avec l'appli TikTok est le plus simple). Tes favoris sont ensuite récupérés à chaque ouverture de l'app. La session reste sur ton ordinateur.</span></span></h3>
+    <p class="small" id="acctLine" role="status"></p>
+    <div class="actions" id="acctActions"></div>
+
     <h3>Importer l'export TikTok <span class="tip start"><button type="button" class="tip-btn" aria-label="Astuce" aria-expanded="false">?</button><span class="tip-bubble" role="tooltip"><b>Astuce</b>Dans TikTok : Profil, Paramètres et confidentialité, Compte, Télécharger tes données, format JSON. Dépose ensuite le .zip reçu ici.</span></span></h3>
     <form id="upload">
       <label class="file-pick" id="filePick"><input type="file" name="file" accept=".json,.zip,.txt" required><span id="fileLabel">Choisir le .zip ou le .json…</span></label>
@@ -343,8 +348,10 @@
       <div class="actions"><button class="btn" type="submit">Ajouter</button></div>
     </form>
 
-    <h3>Connecter mon compte <span class="tip start"><button type="button" class="tip-btn" aria-label="Astuce" aria-expanded="false">?</button><span class="tip-bubble" role="tooltip"><b>Astuce</b>Import automatique par l'API officielle de TikTok, réservé à l'Europe. TikTok met quelques heures à préparer l'export : clique ensuite sur « Vérifier l'export ».</span></span></h3>
-    <div class="actions"><a class="btn quiet" href="/auth/tiktok/login">Connecter TikTok</a><button class="btn bare" id="sync" type="button">Vérifier l'export</button></div>
+    <div id="oauthBlock" hidden>
+    <h3>API officielle TikTok <span class="tip start"><button type="button" class="tip-btn" aria-label="Astuce" aria-expanded="false">?</button><span class="tip-bubble" role="tooltip"><b>Astuce</b>Import par la Data Portability API (application développeur TikTok approuvée). TikTok met quelques heures à préparer l'export : clique ensuite sur « Vérifier l'export ».</span></span></h3>
+    <div class="actions"><a class="btn quiet" href="/auth/tiktok/login">Connecter l'API</a><button class="btn bare" id="sync" type="button">Vérifier l'export</button></div>
+    </div>
 
     <h3>Entretien</h3>
     <div class="actions"><button class="btn quiet" type="button" id="retry">Réessayer les échecs</button><button class="btn bare" type="button" id="reindex">Tout réindexer</button></div>
@@ -431,8 +438,8 @@ async function refresh() {
   }
   const s = r.stats, j = r.job, f = r.features;
   const pct = Math.round(100 * j.done / Math.max(1, j.total));
-  $("#statusBtn").className = "status" + (j.running ? " busy" : (s.error || (!f.ffmpeg && (f.whisper || f.ocr)) ? " warn" : ""));
-  $("#statusText").textContent = j.running ? `Indexation ${j.done}/${j.total}` : plural(s.total, "favori");
+  $("#statusBtn").className = "status" + (j.running || r.account.running ? " busy" : (s.error || (!f.ffmpeg && (f.whisper || f.ocr)) ? " warn" : ""));
+  $("#statusText").textContent = j.running ? `Indexation ${j.done}/${j.total}` : r.account.running ? "Synchro des favoris…" : plural(s.total, "favori");
   $("#stats").innerHTML = `<div class="stat-grid">
       <div><b>${s.total}</b><span>favoris</span></div><div><b>${s.done}</b><span>indexés</span></div><div><b>${s.analysed}</b><span>analysés</span></div>
       <div><b>${s.videos}</b><span>vidéos</span></div><div><b>${s.carousels}</b><span>carrousels</span></div><div><b>${s.with_transcript}</b><span>transcrits</span></div>
@@ -448,10 +455,46 @@ async function refresh() {
     <li>Texte à l'écran (OCR) ${yes(f.ocr, "activé", "désactivé")}</li>
     <li>ffmpeg ${yes(f.ffmpeg, "trouvé", "introuvable")}</li>
     <li>Analyse IA ${yes(f.llm !== "none", esc(f.llm_model), "extraction locale seule")}</li>
-    <li>Compte TikTok ${yes(f.tiktok_connected, "connecté", f.tiktok_oauth ? "non connecté" : "non configuré")}</li>`;
-  refreshTimer = setTimeout(refresh, j.running ? 2000 : 10000);
+    <li>Compte TikTok ${yes(r.account.username, "@" + esc(r.account.username), "non connecté")}</li>`;
+  renderAccount(r.account, f);
+  $("#oauthBlock").hidden = !f.tiktok_oauth;
+  refreshTimer = setTimeout(refresh, j.running || r.account.running ? 2000 : 10000);
 }
 $("#statusBtn").onclick = () => $("#drawer").showModal();
+
+function ago(ts) {
+  const m = Math.round((Date.now() / 1000 - ts) / 60);
+  return m < 1 ? "à l'instant" : m < 60 ? `il y a ${m} min` : m < 1440 ? `il y a ${Math.round(m / 60)} h` : `il y a ${Math.round(m / 1440)} j`;
+}
+function renderAccount(a, f) {
+  const line = $("#acctLine"), box = $("#acctActions");
+  const connected = a.has_session && a.username;
+  let text;
+  if (!a.available) text = "Installe Playwright pour connecter ton compte : pip install playwright";
+  else if (a.running) text = a.message || "Synchronisation…";
+  else if (a.message && a.error) text = a.message;
+  else if (connected) text = `Connecté : @${a.username}` + (a.last_sync ? ` · synchronisé ${ago(a.last_sync)}` : "") + (a.message ? `. ${a.message}` : "");
+  else text = "Pas encore connecté.";
+  line.textContent = text;
+  line.className = "small" + (a.error && !a.running ? " warn-text" : "");
+  const key = [a.available, a.running, connected].join();
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  if (!a.available) { box.innerHTML = ""; return; }
+  box.innerHTML = a.running ? `<button class="btn quiet" type="button" disabled>Synchronisation…</button>`
+    : connected ? `<button class="btn" type="button" id="acctSync">Synchroniser</button><button class="btn bare" type="button" id="acctFull">Tout relire</button><button class="btn bare" type="button" id="acctLogout">Se déconnecter</button>`
+    : `<button class="btn" type="button" id="acctLogin">Se connecter à TikTok</button>`;
+  $("#acctLogin")?.addEventListener("click", () => accountPost("/api/account/login", "Une fenêtre de navigateur s'ouvre : connecte-toi dedans."));
+  $("#acctSync")?.addEventListener("click", () => accountPost("/api/account/sync"));
+  $("#acctFull")?.addEventListener("click", () => accountPost("/api/account/sync?full=true"));
+  $("#acctLogout")?.addEventListener("click", () => confirm("Se déconnecter de TikTok ? Les favoris déjà importés restent.") && accountPost("/api/account/logout"));
+}
+async function accountPost(url, hint) {
+  try { const j = await api(url, { method: "POST" }); if (hint && j.started) $("#acctLine").textContent = hint; }
+  catch (err) { $("#acctLine").textContent = err.message; }
+  delete $("#acctActions").dataset.key;
+  refresh();
+}
 
 // ---------- recherche ----------
 async function doSearch(e, more = false) {
@@ -811,6 +854,7 @@ $("#reindex").onclick = () => confirm("Tout réindexer ? Les infos de chaque fav
 $("#sync").onclick = () => post("/api/tiktok/sync");
 const initial = new URLSearchParams(location.search).get("q");
 refresh().then(() => { if (initial) $("#q").value = initial; doSearch(); });
+api("/api/account/sync?auto=true", { method: "POST" }).then(j => j?.started && refresh()).catch(() => {});
 </script>
 </body>
 </html>

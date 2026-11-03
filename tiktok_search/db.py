@@ -296,6 +296,14 @@ class Database:
         with self.connect() as conn:
             conn.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)", (key, value))
 
+    def kv_delete(self, *keys: str) -> None:
+        with self.connect() as conn:
+            conn.executemany("DELETE FROM kv WHERE key = ?", [(k,) for k in keys])
+
+    def all_ids(self) -> set[str]:
+        with self.connect() as conn:
+            return {r[0] for r in conn.execute("SELECT id FROM videos")}
+
 
 def _video_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
