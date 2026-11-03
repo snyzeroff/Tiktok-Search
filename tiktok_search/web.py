@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import hmac
+import logging
+import os
 import threading
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import analyze, importer, ocr, pipeline, tiktok_oauth, transcribe
 from .config import get_settings
@@ -20,9 +23,46 @@ db = Database(settings.db_path)
 job = pipeline.Job()
 STATIC = Path(__file__).parent / "static"
 
+log = logging.getLogger(__name__)
+MAX_UPLOAD = 1024 * 1024 * 1024  # 1 Go
+ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"} | {
+    h.strip().lower() for h in os.getenv("TTS_ALLOWED_HOSTS", "").split(",") if h.strip()}
+
 app = FastAPI(title="TikTok Search")
 app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
-_oauth_states: set[str] = set()
+_oauth_states: list[str] = []
+
+
+@app.middleware("http")
+async def security(request: Request, call_next):
+    """- Host autorisé uniquement (bloque le « DNS rebinding »).
+    - Requêtes POST de l'API : en-tête X-TTS obligatoire, qu'un site tiers ne peut pas
+      envoyer sans autorisation CORS (bloque le CSRF : personne ne peut lancer une analyse
+      payante ou une réindexation depuis une autre page ouverte dans ton navigateur).
+    - Jeton d'accès optionnel (TTS_AUTH_TOKEN) si le serveur est exposé sur le réseau."""
+    host = (request.headers.get("host") or "").rsplit(":", 1)[0].lower()
+    if host and host not in ALLOWED_HOSTS and "*" not in ALLOWED_HOSTS:
+        return PlainTextResponse("Hôte non autorisé (ajoute-le à TTS_ALLOWED_HOSTS)", status_code=400)
+    if settings.auth_token:
+        token = (request.query_params.get("token") or request.cookies.get("tts_token")
+                 or request.headers.get("authorization", "").removeprefix("Bearer ").strip())
+        if not hmac.compare_digest(token.encode(), settings.auth_token.encode()):
+            return PlainTextResponse("Accès refusé : ajoute ?token=… à l'adresse", status_code=401)
+    if request.method not in ("GET", "HEAD", "OPTIONS") and request.url.path.startswith("/api/") \
+            and request.headers.get("x-tts") != "1":
+        return JSONResponse({"detail": "en-tête X-TTS manquant"}, status_code=403)
+    response = await call_next(request)
+    if settings.auth_token and request.query_params.get("token"):
+        response.set_cookie("tts_token", settings.auth_token, httponly=True, samesite="strict", max_age=30 * 86400)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    if request.url.path == "/":
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: https:; media-src 'self'; frame-src https://www.tiktok.com; "
+            "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+    return response
 
 
 def _start_processing(retry_errors: bool = False) -> bool:
@@ -30,11 +70,24 @@ def _start_processing(retry_errors: bool = False) -> bool:
         if job.running:
             return False
         job.running = True
-    threading.Thread(
-        target=pipeline.process_all, kwargs={"db": db, "settings": settings, "retry_errors": retry_errors, "job": job},
-        daemon=True,
-    ).start()
+
+    def run() -> None:
+        try:
+            pipeline.process_all(db, settings, retry_errors=retry_errors, job=job)
+        except Exception as e:  # noqa: BLE001
+            log.exception("indexation interrompue")
+            job.message = f"Indexation interrompue : {e}"
+        finally:
+            job.running = False
+
+    threading.Thread(target=run, daemon=True, name="indexation").start()
     return True
+
+
+@app.post("/api/process/cancel")
+def cancel_processing() -> dict:
+    job.cancel = True
+    return {"cancelling": job.running}
 
 
 @app.get("/")
@@ -55,6 +108,7 @@ def status() -> dict:
             "llm": settings.llm_provider if settings.llm_provider in analyze.PROVIDERS else "none",
             "llm_model": analyze.model_name(settings),
             "keep_video": settings.keep_video,
+            "ffmpeg": pipeline.ffmpeg_available(),
         },
         "fields": FIELD_LABELS,
     }
@@ -62,8 +116,11 @@ def status() -> dict:
 
 @app.post("/api/import")
 async def import_export(file: UploadFile = File(...), likes: bool = Form(False), process: bool = Form(True)) -> dict:
+    raw = await file.read(MAX_UPLOAD + 1)
+    if len(raw) > MAX_UPLOAD:
+        raise HTTPException(413, "Fichier trop volumineux (1 Go max).")
     try:
-        data = importer.load_export_bytes(await file.read())
+        data = importer.load_export_bytes(raw)
     except Exception as e:
         raise HTTPException(400, f"Fichier illisible : {e}") from e
     items = importer.parse_export(data, include_likes=likes)
@@ -74,8 +131,8 @@ async def import_export(file: UploadFile = File(...), likes: bool = Form(False),
 
 
 @app.post("/api/links")
-def import_links(text: str = Form(...), process: bool = Form(True)) -> dict:
-    items = importer.parse_links_text(text)
+def import_links(text: str = Form(..., max_length=2_000_000), process: bool = Form(True)) -> dict:
+    items = importer.parse_links_text(importer.resolve_short_links(text))
     added = pipeline.import_items(db, items, "links")
     if process and added:
         _start_processing()
@@ -112,13 +169,13 @@ def _public(v: dict) -> dict:
 
 @app.get("/api/search")
 def api_search(
-    q: str,
+    q: str = Query(..., max_length=500),
     field: list[str] = Query(default=[]),
     any: bool = False,
     kind: str = "",
     sort: str = "relevance",
-    limit: int = Query(50, le=200),
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
 ) -> dict:
     fields = [f for f in field if f in FTS_COLUMNS] or None
     results = search(db, q, fields=fields, any_term=any, limit=limit, offset=offset, kind=kind or None, sort=sort)
@@ -130,7 +187,7 @@ def api_search(
 
 
 @app.get("/api/videos")
-def api_videos(kind: str = "", limit: int = Query(60, le=200), offset: int = 0) -> dict:
+def api_videos(kind: str = "", limit: int = Query(60, ge=1, le=200), offset: int = Query(0, ge=0)) -> dict:
     return {"results": [{**_public(v), "matches": {}, "hits": []}
                         for v in db.list_videos(limit=limit, offset=offset, kind=kind or None)]}
 
@@ -147,9 +204,10 @@ def api_video(video_id: str, q: str = "") -> dict:
 
 
 class AnalyzeRequest(BaseModel):
-    ids: list[str]
+    ids: list[str] = Field(..., max_length=50)
     mode: str = "text"   # text | screens | auto
     force: bool = False
+    cached_only: bool = False  # afficher une analyse existante sans jamais rien facturer
 
 
 @app.post("/api/analyze")
@@ -161,15 +219,20 @@ def api_analyze(req: AnalyzeRequest) -> dict:
     if req.mode not in ("text", "screens", "auto"):
         raise HTTPException(400, "mode invalide")
     try:
-        return analyze.analyze_many(db, settings, req.ids, req.mode, req.force)
+        return analyze.analyze_many(db, settings, req.ids, req.mode, req.force, cached_only=req.cached_only)
     except KeyError as e:
         raise HTTPException(404, f"Vidéo inconnue : {e}") from e
 
 
 @app.get("/api/analyze/export")
-def api_analyze_export(ids: str, format: str = "md", mode: str = "text"):
-    id_list = [i for i in ids.split(",") if i]
-    data = analyze.analyze_many(db, settings, id_list, mode)
+def api_analyze_export(ids: str = Query(..., max_length=10000), format: str = "md", mode: str = "text"):
+    if mode not in ("text", "screens", "auto") or format not in ("md", "csv", "json"):
+        raise HTTPException(400, "mode ou format invalide")
+    id_list = [i for i in ids.split(",") if i][:200]
+    try:
+        data = analyze.analyze_many(db, settings, id_list, mode, cached_only=True)  # export = jamais payant
+    except KeyError as e:
+        raise HTTPException(404, f"Vidéo inconnue : {e}") from e
     if format == "json":
         return data
     if format == "csv":
@@ -187,7 +250,8 @@ def tiktok_login() -> RedirectResponse:
         url, state = tiktok_oauth.authorize_url(settings)
     except tiktok_oauth.TikTokNotConfigured as e:
         raise HTTPException(400, str(e)) from e
-    _oauth_states.add(state)
+    _oauth_states.append(state)
+    del _oauth_states[:-20]
     return RedirectResponse(url)
 
 
@@ -197,7 +261,7 @@ def tiktok_callback(request: Request, code: str = "", state: str = "", error: st
         raise HTTPException(400, f"Connexion TikTok refusée : {error or 'code manquant'}")
     if state not in _oauth_states:
         raise HTTPException(400, "Paramètre state invalide.")
-    _oauth_states.discard(state)
+    _oauth_states.remove(state)
     tiktok_oauth.exchange_code(db, settings, code)
     tiktok_oauth.request_export(db, settings)
     return RedirectResponse("/?connected=1")

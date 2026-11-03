@@ -8,6 +8,7 @@ Ordre des sources, de la plus complète à la plus légère :
 
 from __future__ import annotations
 
+import html
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -33,6 +34,7 @@ class VideoMeta:
     duration: float | None = None
     image_urls: list[str] = field(default_factory=list)
     subtitle_segments: list[dict] = field(default_factory=list)  # [{start, end, text}]
+    source: str = "page"  # page | ytdlp | oembed (les deux derniers sont des replis dégradés)
 
     @classmethod
     def from_page(cls, p: PageItem) -> "VideoMeta":
@@ -50,28 +52,23 @@ def _ts(s: str) -> float:
 
 
 def parse_vtt_segments(text: str) -> list[dict]:
-    """WebVTT/SRT → [{start, end, text}], sans balises ni doublons consécutifs."""
+    """WebVTT/SRT → [{start, end, text}], analysé bloc par bloc (identifiants de cue, NOTE,
+    STYLE, entités HTML, balises), sans doublons consécutifs."""
     segments: list[dict] = []
-    current: dict | None = None
-    for raw in text.splitlines():
-        line = raw.strip()
-        if "-->" in line:
-            a, _, b = line.partition("-->")
-            current = {"start": _ts(a), "end": _ts(b), "text": ""}
-            segments.append(current)
-            continue
-        if (not line or line == "WEBVTT" or line.isdigit()
-                or line.startswith(("NOTE", "Kind:", "Language:", "STYLE")) or current is None):
-            continue
-        line = re.sub(r"<[^>]+>", "", line).strip()
-        if line:
-            current["text"] = f"{current['text']} {line}".strip()
+    for block in re.split(r"\r?\n\s*\r?\n", text.replace("\ufeff", "")):
+        lines = [ln.rstrip() for ln in block.strip().splitlines()]
+        idx = next((i for i, ln in enumerate(lines) if "-->" in ln), None)
+        if idx is None:
+            continue  # en-tête WEBVTT, NOTE, STYLE, REGION…
+        a, _, b = lines[idx].partition("-->")
+        body = " ".join(html.unescape(re.sub(r"<[^>]+>", "", ln)).strip() for ln in lines[idx + 1:])
+        body = re.sub(r"\s+", " ", body).strip()
+        if body:
+            segments.append({"start": _ts(a), "end": _ts(b.split()[0] if b.split() else b), "text": body})
     out: list[dict] = []
     for s in segments:
-        if not s["text"]:
-            continue
         if out and out[-1]["text"] == s["text"]:
-            out[-1]["end"] = s["end"]
+            out[-1]["end"] = max(out[-1]["end"], s["end"])
         else:
             out.append(s)
     return out
@@ -120,6 +117,7 @@ def fetch_metadata_ytdlp(video_id: str) -> VideoMeta:
         except httpx.HTTPError:
             pass
     return VideoMeta(
+        source="ytdlp",
         video_id=video_id,
         author=info.get("uploader") or info.get("creator") or info.get("channel") or "",
         description=description,
@@ -138,6 +136,7 @@ def fetch_oembed(video_id: str) -> VideoMeta:
     data = r.json()
     description = data.get("title", "")
     return VideoMeta(
+        source="oembed",
         video_id=video_id,
         author=data.get("author_unique_id") or data.get("author_name", ""),
         description=description,
@@ -152,16 +151,29 @@ def download_video(video_id: str, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     template = str(out_dir / f"{video_id}.%(ext)s")
     # Qualité modeste : suffisante pour Whisper/OCR et bien plus légère.
-    with _ydl({"outtmpl": template, "format": "best[height<=720][ext=mp4]/best[ext=mp4]/best"}) as ydl:
+    with _ydl({"outtmpl": template, "format": "best[height<=720][ext=mp4]/best[ext=mp4]/best",
+               "max_filesize": 300 * 1024 * 1024, "retries": 3, "fragment_retries": 3}) as ydl:
         info = ydl.extract_info(canonical_url(video_id), download=True)
-        return Path(ydl.prepare_filename(info))
+        path = Path(ydl.prepare_filename(info))
+    if not path.is_file() or path.stat().st_size == 0:
+        raise RuntimeError("téléchargement vide ou refusé (fichier trop gros ?)")
+    return path
 
 
-def extract_audio(video_path: Path) -> Path:
-    """WAV mono 16 kHz, le format attendu par Whisper."""
-    audio = video_path.with_suffix(".wav")
-    subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", "-i", str(video_path), "-vn", "-ac", "1", "-ar", "16000", str(audio)],
-        check=True,
-    )
+def run_ffmpeg(args: list[str], timeout: int = 900) -> None:
+    try:
+        subprocess.run(["ffmpeg", "-nostdin", "-y", "-loglevel", "error", *args], check=True,
+                       timeout=timeout, capture_output=True)
+    except FileNotFoundError as e:
+        raise RuntimeError("ffmpeg n'est pas installé") from e
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"ffmpeg : {e.stderr.decode(errors='ignore')[-300:]}") from e
+
+
+def extract_audio(video_path: Path, out_dir: Path | None = None) -> Path:
+    """WAV mono 16 kHz, le format attendu par Whisper (écrit hors du dossier media)."""
+    out_dir = out_dir or video_path.parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+    audio = out_dir / f"{video_path.stem}.wav"
+    run_ffmpeg(["-i", str(video_path), "-vn", "-ac", "1", "-ar", "16000", str(audio)])
     return audio

@@ -60,12 +60,17 @@ def main(argv: list[str] | None = None) -> int:
     db = Database(settings.db_path)
 
     if args.cmd == "import":
-        items = importer.parse_export(importer.load_export(args.file), include_likes=args.likes)
+        try:
+            items = importer.parse_export(importer.load_export(args.file), include_likes=args.likes)
+        except (OSError, ValueError) as e:
+            print(f"Import impossible : {e}", file=sys.stderr)
+            return 1
         added = pipeline.import_items(db, items, "export")
         print(f"{len(items)} vidéos trouvées dans l'export, {added} nouvelles.")
         print("Lance maintenant : tiktok-search process")
     elif args.cmd == "links":
-        items = importer.parse_links_text(open(args.file, encoding="utf-8").read())
+        with open(args.file, encoding="utf-8", errors="replace") as f:
+            items = importer.parse_links_text(importer.resolve_short_links(f.read()))
         added = pipeline.import_items(db, items, "links")
         print(f"{len(items)} liens reconnus, {added} nouveaux.")
     elif args.cmd == "process":
@@ -74,13 +79,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Transcription Whisper : {'oui' if transcribe.is_available() and settings.transcribe == 'auto' else 'non'}"
               f" · OCR : {'oui' if settings.ocr and ocr.is_available() else 'non'}")
 
-        def progress(i: int, n: int, v: dict) -> None:
-            row = db.get_video(v["id"]) or {}
-            mark = "✓" if row.get("status") == "done" else "✗"
-            print(f"[{i}/{n}] {mark} {v['id']} {row.get('error', '')[:80]}", flush=True)
+        if not pipeline.ffmpeg_available():
+            print("⚠️  ffmpeg introuvable : pas de transcription Whisper ni d'OCR.")
+        marks = {"done": "✓", "unavailable": "∅", "error": "✗"}
 
-        n = pipeline.process_all(db, settings, retry_errors=args.retry_errors, limit=args.limit,
-                                 on_progress=progress)
+        def progress(i: int, n: int, v: dict, status: str) -> None:
+            row = db.get_video(v["id"]) or {}
+            print(f"[{i}/{n}] {marks.get(status, '?')} {v['id']} {row.get('error', '')[:80]}", flush=True)
+
+        job = pipeline.Job()
+        try:
+            n = pipeline.process_all(db, settings, retry_errors=args.retry_errors, limit=args.limit,
+                                     on_progress=progress, job=job)
+        except KeyboardInterrupt:
+            job.cancel = True
+            print("\nArrêt demandé : les vidéos non traitées restent en attente.")
+            return 130
+        if job.message:
+            print(job.message)
         print(f"{n} vidéos traitées.")
     elif args.cmd == "analyze":
         ids = [importer.extract_video_id(x) or x for x in args.ids]
@@ -107,11 +123,13 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  [{FIELD_LABELS[col]}] {_hl(snip)}")
             for h in r.hits[:8]:
                 where = f"page {h['page']}" if h["page"] else analyze.fmt_time(h["start"])
-                print(f"    {'🖼' if h['page'] else '▶'} {where:>7}  {_hl(h['text'])}")
+                icon = "🖼" if h["page"] else ("🔤" if h["kind"] == "ocr" else "▶")
+                print(f"    {icon} {where:>7}  {_hl(h['text'])}")
     elif args.cmd == "stats":
         st = db.stats()
-        print(f"{st['total']} vidéos · {st['done']} indexées · {st['pending']} en attente · "
-              f"{st['error']} en erreur · {st['with_transcript']} avec transcription")
+        print(f"{st['total']} favoris ({st['videos']} vidéos, {st['carousels']} carrousels) · {st['done']} indexés · "
+              f"{st['pending']} en attente · {st['error']} en erreur · {st['unavailable']} indisponibles · "
+              f"{st['with_transcript']} transcrits · {st['analysed']} analysés")
     elif args.cmd == "serve":
         import uvicorn
 

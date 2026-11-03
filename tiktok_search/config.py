@@ -23,6 +23,13 @@ def _bool(name: str, default: bool) -> bool:
     return default if v is None else v.strip().lower() in {"1", "on", "true", "yes", "oui"}
 
 
+def _num(name: str, default, cast):
+    try:
+        return cast(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass
 class Settings:
     data_dir: Path = field(default_factory=lambda: Path(os.getenv("TTS_DATA_DIR", "./data")))
@@ -31,14 +38,16 @@ class Settings:
     ocr: bool = field(default_factory=lambda: _bool("TTS_OCR", False))
     ocr_lang: str = field(default_factory=lambda: os.getenv("TTS_OCR_LANG", "fra+eng"))
     keep_video: bool = field(default_factory=lambda: _bool("TTS_KEEP_VIDEO", False))
-    request_delay: float = field(default_factory=lambda: float(os.getenv("TTS_REQUEST_DELAY", "1.0")))
+    request_delay: float = field(default_factory=lambda: _num("TTS_REQUEST_DELAY", 1.0, float))
+    workers: int = field(default_factory=lambda: max(1, min(8, _num("TTS_WORKERS", 2, int))))
+    auth_token: str = field(default_factory=lambda: os.getenv("TTS_AUTH_TOKEN", ""))
     # Analyse IA : "gemini" (palier gratuit Google AI Studio), "ollama" (100 % local), "none" (extraction locale seule)
     llm_provider: str = field(default_factory=lambda: os.getenv("TTS_LLM", "gemini" if os.getenv("GEMINI_API_KEY") else "none"))
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest"))
     ollama_url: str = field(default_factory=lambda: os.getenv("OLLAMA_URL", "http://localhost:11434"))
     ollama_model: str = field(default_factory=lambda: os.getenv("OLLAMA_MODEL", "qwen2.5vl:7b"))
-    analysis_max_screens: int = field(default_factory=lambda: int(os.getenv("TTS_MAX_SCREENS", "8")))
+    analysis_max_screens: int = field(default_factory=lambda: max(1, min(30, _num("TTS_MAX_SCREENS", 8, int))))
     tiktok_client_key: str = field(default_factory=lambda: os.getenv("TIKTOK_CLIENT_KEY", ""))
     tiktok_client_secret: str = field(default_factory=lambda: os.getenv("TIKTOK_CLIENT_SECRET", ""))
     tiktok_redirect_uri: str = field(

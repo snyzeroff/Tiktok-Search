@@ -37,8 +37,10 @@ def extract_video_id(url: str) -> str | None:
 
 def canonical_url(video_id: str, author: str = "", kind: str = "video") -> str:
     # TikTok redirige /@/video/<id> vers la bonne URL quel que soit l'auteur (et vers /photo/ pour un carrousel).
+    from urllib.parse import quote
+
     path = "photo" if kind == "photo" else "video"
-    return f"https://www.tiktok.com/@{author}/{path}/{video_id}"
+    return f"https://www.tiktok.com/@{quote(author or '', safe='._-')}/{path}/{video_id}"
 
 
 def kind_from_url(url: str) -> str:
@@ -95,20 +97,99 @@ def parse_export(data: dict, include_likes: bool = False) -> list[FavoriteItem]:
     return list(seen.values())
 
 
+MAX_UNCOMPRESSED = 1024 * 1024 * 1024  # 1 Go : protège contre les « zip bombs »
+
+
+def _decode(raw: bytes) -> str:
+    for enc in ("utf-8-sig", "utf-16", "latin-1"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def parse_txt_list(text: str) -> list[dict]:
+    """Format TXT de l'export TikTok : blocs « Date: … » / « Link: … »."""
+    out: list[dict] = []
+    date = ""
+    for line in text.splitlines():
+        key, _, value = line.partition(":")
+        key, value = key.strip().lower(), value.strip()
+        if key in ("date", "favorite date"):
+            date = value
+        elif key in ("link", "video link") or VIDEO_ID_RE.search(line):
+            link = value if key in ("link", "video link") else line.strip()
+            out.append({"Date": date, "Link": link})
+            date = ""
+    return out
+
+
 def load_export_bytes(raw: bytes) -> dict:
-    """Accepte un .json ou un .zip contenant le JSON de l'export."""
+    """Accepte un .json, un .txt, ou un .zip contenant l'export (format JSON ou TXT)."""
     if raw[:2] == b"PK":
-        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
-            names = [n for n in zf.namelist() if n.lower().endswith(".json")]
-            if not names:
-                raise ValueError("Aucun fichier .json trouvé dans l'archive.")
-            names.sort(key=lambda n: ("user_data" not in n.lower(), -zf.getinfo(n).file_size))
-            raw = zf.read(names[0])
-    return json.loads(raw.decode("utf-8-sig"))
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(raw))
+        except zipfile.BadZipFile as e:
+            raise ValueError("Archive .zip corrompue.") from e
+        with zf:
+            infos = [i for i in zf.infolist() if not i.is_dir()]
+            if sum(i.file_size for i in infos) > MAX_UNCOMPRESSED * 4:
+                raise ValueError("Archive trop volumineuse une fois décompressée.")
+            jsons = [i for i in infos if i.filename.lower().endswith(".json")]
+            if jsons:
+                jsons.sort(key=lambda i: ("user_data" not in i.filename.lower(), -i.file_size))
+                if jsons[0].file_size > MAX_UNCOMPRESSED:
+                    raise ValueError("Fichier JSON trop volumineux.")
+                return _loads(zf.read(jsons[0]))
+            txts = [i for i in infos if i.filename.lower().endswith(".txt")
+                    and _classify((Path(i.filename).stem,)) and i.file_size < MAX_UNCOMPRESSED]
+            if not txts:
+                raise ValueError("Ni JSON ni « Favorite Videos.txt » trouvé dans l'archive.")
+            return {Path(i.filename).stem: parse_txt_list(_decode(zf.read(i))) for i in txts}
+    text = _decode(raw).strip()
+    if text.startswith(("{", "[")):
+        return _loads(raw)
+    return {"Favorite Videos": parse_txt_list(text)}
+
+
+def _loads(raw: bytes):
+    try:
+        data = json.loads(_decode(raw))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"JSON invalide : {e}") from e
+    if not isinstance(data, (dict, list)):
+        raise ValueError("JSON inattendu.")
+    return data if isinstance(data, dict) else {"Favorite Videos": data}
 
 
 def load_export(path: Path | str) -> dict:
     return load_export_bytes(Path(path).read_bytes())
+
+
+SHORT_LINK_RE = re.compile(r"https?://(?:vm|vt|m)\.tiktok\.com/[\w/-]+|https?://(?:www\.)?tiktok\.com/t/[\w/-]+")
+
+
+def resolve_short_links(text: str, timeout: float = 15) -> str:
+    """Remplace les liens courts (vm.tiktok.com/…) par l'URL complète contenant l'ID."""
+    shorts = list(dict.fromkeys(SHORT_LINK_RE.findall(text)))[:500]
+    if not shorts:
+        return text
+    import httpx
+
+    from .tiktok_page import HEADERS
+
+    with httpx.Client(headers=HEADERS, follow_redirects=True, timeout=timeout) as client:
+        for short in shorts:
+            try:
+                final = str(client.head(short).url)
+                if not extract_video_id(final):
+                    final = str(client.get(short).url)
+            except httpx.HTTPError:
+                continue
+            if extract_video_id(final):
+                text = text.replace(short, final)
+    return text
 
 
 def parse_links_text(text: str) -> list[FavoriteItem]:

@@ -139,6 +139,30 @@ transcription sont supprimées juste après traitement.
 > ses propres favoris. Le téléchargement via yt-dlp peut casser quand TikTok modifie son site
 > (`pip install -U yt-dlp`).
 
+## Robustesse
+
+- **TikTok qui bloque** (429/403/captcha) : pauses croissantes (30 s → 10 min), puis arrêt propre.
+  Les vidéos restantes sont gardées en attente, et un bouton « Arrêter » est disponible.
+- **Vidéo supprimée ou privée** : marquée « indisponible » et non retentée en boucle.
+- **Erreurs réseau passagères** : nouvelles tentatives automatiques. Téléchargements plafonnés
+  en taille et écrits de façon atomique (jamais de fichier à moitié écrit).
+- **Échec partiel** : si la transcription ou l'OCR échoue, la légende et les hashtags sont quand
+  même indexés, et l'avertissement est conservé.
+- **Repli dégradé** (yt-dlp, oEmbed) : n'écrase jamais des données déjà indexées.
+- **Import** : JSON *ou* TXT, `.zip` ou fichier seul, liens courts `vm.tiktok.com`, protection
+  contre les archives piégées, limite de 1 Go.
+- **IA** : réponse validée et normalisée, délai de nouvelle tentative de Gemini respecté, résultat
+  invalide jamais mis en cache. L'export et l'affichage d'une analyse existante ne sont jamais
+  facturés.
+- **Sécurité du serveur local** : protection CSRF (en-tête obligatoire) et DNS rebinding (hôtes
+  autorisés), en-têtes CSP et anti-iframe, jeton d'accès optionnel (`TTS_AUTH_TOKEN`), échappement
+  HTML partout, export CSV protégé contre l'injection de formules.
+- **Base SQLite en mode WAL** : recherche fluide pendant l'indexation, mise à jour automatique du
+  schéma sans perte.
+
+Ordres de grandeur mesurés sur 5 000 favoris (60 000 phrases horodatées) : indexation en base
+≈ 0,7 ms par vidéo, recherche avec timecodes en 10 à 50 ms.
+
 ## Tests
 
 ```bash

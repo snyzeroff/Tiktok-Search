@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -36,7 +37,8 @@ VIDEO_COLUMNS = {
     "duration": "REAL",
     "favorited_at": "TEXT DEFAULT ''",
     "source": "TEXT DEFAULT ''",
-    "status": "TEXT DEFAULT 'pending'",    # pending | done | error
+    "status": "TEXT DEFAULT 'pending'",    # pending | done | error | unavailable (supprimée/privée)
+    "attempts": "INTEGER DEFAULT 0",
     "error": "TEXT DEFAULT ''",
     "updated_at": "REAL",
 }
@@ -71,6 +73,8 @@ CREATE TABLE IF NOT EXISTS analyses (
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
 """
 
+FTS_VERSION = "2"
+
 FTS_SCHEMA = (
     f"CREATE VIRTUAL TABLE videos_fts USING fts5(id UNINDEXED, {', '.join(FTS_COLUMNS)}, "
     f'tokenize = "{TOKENIZER}")'
@@ -78,11 +82,18 @@ FTS_SCHEMA = (
 
 
 class Database:
+    """Une connexion SQLite par thread (réutilisée), en mode WAL : l'interface peut lire et
+    chercher pendant que l'indexation écrit en arrière-plan."""
+
     def __init__(self, path: Path | str):
         self.path = str(path)
+        self._local = threading.local()
+        self._write_lock = threading.RLock()
         with self.connect() as conn:
             conn.executescript(SCHEMA)
             self._migrate(conn)
+            conn.execute("CREATE INDEX IF NOT EXISTS videos_status ON videos(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS videos_fav ON videos(favorited_at)")
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
         existing = {r["name"] for r in conn.execute("PRAGMA table_info(videos)")}
@@ -90,28 +101,56 @@ class Database:
             if col not in existing:
                 conn.execute(f"ALTER TABLE videos ADD COLUMN {col} {decl.replace('PRIMARY KEY', '')}")
         fts_cols = [r["name"] for r in conn.execute("PRAGMA table_info(videos_fts)")]
-        if fts_cols != ["id", *FTS_COLUMNS]:
+        version = conn.execute("SELECT value FROM kv WHERE key = 'fts_version'").fetchone()
+        if fts_cols != ["id", *FTS_COLUMNS] or not version or version[0] != FTS_VERSION:
             conn.execute("DROP TABLE IF EXISTS videos_fts")
             conn.execute(FTS_SCHEMA)
-            for row in conn.execute("SELECT * FROM videos").fetchall():
+            for row in conn.execute("SELECT rowid AS _rowid, * FROM videos").fetchall():
                 self._index_row(conn, row)
+            conn.execute("INSERT OR REPLACE INTO kv (key, value) VALUES ('fts_version', ?)", (FTS_VERSION,))
+
+    def _conn(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self.path, timeout=60, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=60000")
+            conn.execute("PRAGMA foreign_keys=ON")
+            self._local.conn = conn
+        return conn
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.path, timeout=30)
-        conn.row_factory = sqlite3.Row
+        """Transaction : validée à la sortie, annulée en cas d'exception."""
+        conn = self._conn()
+        depth = getattr(self._local, "depth", 0)
+        self._local.depth = depth + 1
         try:
             yield conn
-            conn.commit()
+            if depth == 0:
+                conn.commit()
+        except BaseException:
+            if depth == 0:
+                conn.rollback()
+            raise
         finally:
+            self._local.depth = depth
+
+    def close(self) -> None:
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
             conn.close()
+            self._local.conn = None
 
     @staticmethod
     def _index_row(conn: sqlite3.Connection, row: sqlite3.Row) -> None:
-        conn.execute("DELETE FROM videos_fts WHERE id = ?", (row["id"],))
+        # rowid FTS = rowid de la vidéo : suppression/jointure directes, sans parcourir l'index.
+        conn.execute("DELETE FROM videos_fts WHERE rowid = ?", (row["_rowid"],))
         conn.execute(
-            f"INSERT INTO videos_fts (id, {', '.join(FTS_COLUMNS)}) VALUES (?{', ?' * len(FTS_COLUMNS)})",
-            (row["id"], *(row[c] or "" for c in FTS_COLUMNS)),
+            f"INSERT INTO videos_fts (rowid, id, {', '.join(FTS_COLUMNS)}) VALUES (?, ?{', ?' * len(FTS_COLUMNS)})",
+            (row["_rowid"], row["id"], *(row[c] or "" for c in FTS_COLUMNS)),
         )
 
     # --- vidéos -----------------------------------------------------------
@@ -119,7 +158,7 @@ class Database:
     def add_favorite(self, video_id: str, url: str, favorited_at: str = "", source: str = "",
                      kind: str = "video") -> bool:
         """Ajoute une vidéo à traiter. Retourne False si elle existait déjà."""
-        with self.connect() as conn:
+        with self._write_lock, self.connect() as conn:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO videos (id, url, kind, favorited_at, source, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
@@ -131,11 +170,14 @@ class Database:
         """Met à jour une vidéo et réindexe. Si ``segments`` est fourni, il remplace les anciens."""
         if "images" in fields and not isinstance(fields["images"], str):
             fields["images"] = json.dumps(fields["images"])
+        unknown = set(fields) - set(VIDEO_COLUMNS)
+        if unknown:
+            raise ValueError(f"colonnes inconnues : {unknown}")
         fields["updated_at"] = time.time()
         cols = ", ".join(f"{k} = ?" for k in fields)
-        with self.connect() as conn:
+        with self._write_lock, self.connect() as conn:
             conn.execute(f"UPDATE videos SET {cols} WHERE id = ?", (*fields.values(), video_id))
-            row = conn.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
+            row = conn.execute("SELECT rowid AS _rowid, * FROM videos WHERE id = ?", (video_id,)).fetchone()
             if row is not None:
                 self._index_row(conn, row)
             if segments is not None:
@@ -143,15 +185,16 @@ class Database:
                 if old:
                     conn.execute(f"DELETE FROM segments_fts WHERE rowid IN ({','.join('?' * len(old))})", old)
                     conn.execute("DELETE FROM segments WHERE video_id = ?", (video_id,))
-                for s in segments:
-                    if not (s.get("text") or "").strip():
-                        continue
-                    cur = conn.execute(
-                        "INSERT INTO segments (video_id, kind, start, end, page, text) VALUES (?, ?, ?, ?, ?, ?)",
-                        (video_id, s["kind"], s.get("start"), s.get("end"), s.get("page"), s["text"].strip()),
-                    )
-                    conn.execute("INSERT INTO segments_fts (rowid, text) VALUES (?, ?)",
-                                 (cur.lastrowid, s["text"].strip()))
+                rows = [
+                    (video_id, s["kind"], s.get("start"), s.get("end"), s.get("page"), s["text"].strip())
+                    for s in segments if (s.get("text") or "").strip()
+                ]
+                if rows:
+                    conn.executemany(
+                        "INSERT INTO segments (video_id, kind, start, end, page, text) VALUES (?, ?, ?, ?, ?, ?)", rows)
+                    conn.execute(
+                        "INSERT INTO segments_fts (rowid, text) SELECT id, text FROM segments WHERE video_id = ?",
+                        (video_id,))
 
     def get_video(self, video_id: str) -> dict | None:
         with self.connect() as conn:
@@ -176,7 +219,7 @@ class Database:
             return [_video_dict(r) for r in conn.execute(sql, (*params, limit, offset))]
 
     def videos_to_process(self, retry_errors: bool = False, limit: int | None = None) -> list[dict]:
-        statuses = ("pending", "error") if retry_errors else ("pending",)
+        statuses = ("pending", "error", "unavailable") if retry_errors else ("pending",)
         sql = f"SELECT * FROM videos WHERE status IN ({', '.join('?' * len(statuses))}) ORDER BY favorited_at DESC"
         params: list = list(statuses)
         if limit:
@@ -187,8 +230,15 @@ class Database:
 
     def reset_all(self) -> int:
         """Remet toutes les vidéos en attente (pour tout réindexer après une mise à jour)."""
-        with self.connect() as conn:
-            return conn.execute("UPDATE videos SET status = 'pending', error = ''").rowcount
+        with self._write_lock, self.connect() as conn:
+            return conn.execute("UPDATE videos SET status = 'pending', error = '', attempts = 0").rowcount
+
+    def mark_failure(self, video_id: str, error: str, permanent: bool = False) -> None:
+        with self._write_lock, self.connect() as conn:
+            conn.execute(
+                "UPDATE videos SET status = ?, error = ?, attempts = attempts + 1, updated_at = ? WHERE id = ?",
+                ("unavailable" if permanent else "error", error[:500], time.time(), video_id),
+            )
 
     def stats(self) -> dict:
         with self.connect() as conn:
@@ -203,6 +253,7 @@ class Database:
             "pending": counts.get("pending", 0),
             "done": counts.get("done", 0),
             "error": counts.get("error", 0),
+            "unavailable": counts.get("unavailable", 0),
             "videos": kinds.get("video", 0),
             "carousels": kinds.get("photo", 0),
             "with_transcript": with_transcript,
@@ -228,7 +279,7 @@ class Database:
 
     def save_analysis(self, video_id: str, mode: str, input_hash: str, provider: str, model: str,
                       result: dict) -> None:
-        with self.connect() as conn:
+        with self._write_lock, self.connect() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO analyses VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (video_id, mode, input_hash, provider, model, json.dumps(result, ensure_ascii=False), time.time()),
@@ -248,6 +299,7 @@ class Database:
 
 def _video_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
+    d.pop("_rowid", None)
     try:
         d["images"] = json.loads(d.get("images") or "[]")
     except json.JSONDecodeError:

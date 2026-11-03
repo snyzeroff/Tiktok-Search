@@ -9,6 +9,7 @@ texte affiché, changement de plan…), chacune avec son timecode.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,8 +44,11 @@ def select_distinct(frames: list[tuple[Path, float]], threshold: int = 10, max_s
     kept: list[Screen] = []
     last: int | None = None
     for path, t in frames:
-        with Image.open(path) as im:
-            h = dhash(im)
+        try:
+            with Image.open(path) as im:
+                h = dhash(im)
+        except OSError:  # image tronquée/corrompue : on l'ignore
+            continue
         if last is None or hamming(h, last) >= threshold:
             kept.append(Screen(path, t))
             last = h
@@ -54,23 +58,36 @@ def select_distinct(frames: list[tuple[Path, float]], threshold: int = 10, max_s
     return kept
 
 
-def sample_frames(video_path: Path, fps: float = 1.0, width: int = 720, max_frames: int = 240) -> list[tuple[Path, float]]:
-    out = video_path.parent / f"{video_path.stem}_frames"
-    out.mkdir(exist_ok=True)
-    subprocess.run(
-        [
-            "ffmpeg", "-y", "-loglevel", "error", "-i", str(video_path),
-            "-vf", f"fps={fps},scale={width}:-2", "-frames:v", str(max_frames), "-q:v", "4",
-            str(out / "f_%04d.jpg"),
-        ],
-        check=True,
-    )
+def sample_frames(video_path: Path, fps: float = 1.0, width: int = 720, max_frames: int = 240,
+                  work_dir: Path | None = None) -> list[tuple[Path, float]]:
+    from .enrich import run_ffmpeg
+
+    out = (work_dir or video_path.parent) / f"{video_path.stem}_frames"
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+    # Vidéos longues : on espace les images pour rester sous max_frames.
+    duration = probe_duration(video_path)
+    if duration and duration * fps > max_frames:
+        fps = max_frames / duration
+    run_ffmpeg(["-i", str(video_path), "-vf", f"fps={fps:.4f},scale='min({width},iw)':-2",
+                "-frames:v", str(max_frames), "-q:v", "4", str(out / "f_%04d.jpg")])
     files = sorted(out.glob("f_*.jpg"))
-    return [(f, i / fps) for i, f in enumerate(files)]
+    return [(f, round(i / fps, 2)) for i, f in enumerate(files)]
 
 
-def smart_screens(video_path: Path, max_screens: int = 30, threshold: int = 10) -> list[Screen]:
-    return select_distinct(sample_frames(video_path), threshold=threshold, max_screens=max_screens)
+def probe_duration(video_path: Path) -> float | None:
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                            str(video_path)], capture_output=True, text=True, timeout=60)
+        return float(r.stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def smart_screens(video_path: Path, max_screens: int = 30, threshold: int = 10,
+                  work_dir: Path | None = None) -> list[Screen]:
+    return select_distinct(sample_frames(video_path, work_dir=work_dir), threshold=threshold, max_screens=max_screens)
 
 
 def to_jpeg_bytes(path: Path, max_side: int = 768, quality: int = 70) -> bytes:

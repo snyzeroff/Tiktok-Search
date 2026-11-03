@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+import sqlite3
 from dataclasses import dataclass, field
 
 from .db import FTS_COLUMNS, Database
+
+log = logging.getLogger(__name__)
 
 FIELD_LABELS = {
     "description": "légende",
@@ -41,7 +45,7 @@ def build_match_query(query: str, any_term: bool = False) -> str:
     - ``mot*`` → préfixe ; par défaut le dernier mot est aussi cherché en préfixe
     - tous les termes sont requis (ET), sauf si ``any_term`` (OU)
     """
-    tokens = re.findall(r'(-?)"([^"]+)"|(-?)(\S+)', query)
+    tokens = re.findall(r'(-?)"([^"]+)"|(-?)(\S+)', query[:500])[:32]
     positives: list[str] = []
     negatives: list[str] = []
     for i, (neg_q, phrase, neg_w, word) in enumerate(tokens):
@@ -51,7 +55,7 @@ def build_match_query(query: str, any_term: bool = False) -> str:
             term, neg = word, neg_w
         prefix = term.endswith("*")
         term = re.sub(r'[\"#*()^:{}\[\]]', " ", term).strip()
-        if not term:
+        if not term or not re.search(r"\w", term):  # « - », « & », émojis seuls : rien à chercher
             continue
         fts = '"' + term.replace('"', "") + '"'
         if not phrase and (prefix or (not neg and i == len(tokens) - 1 and len(term) >= 3)):
@@ -65,47 +69,72 @@ def build_match_query(query: str, any_term: bool = False) -> str:
     return q
 
 
+def _segment_matches(db: Database, ids: list[str], query: str, kinds: list[str],
+                     per_video: int | None) -> dict[str, list[dict]]:
+    """Segments correspondants pour plusieurs vidéos en UNE requête par passe.
+
+    Les mots d'une requête peuvent être répartis sur plusieurs phrases : pour les vidéos où
+    aucun segment ne contient *tous* les mots, une seconde passe cherche au moins un des mots.
+    """
+    found: dict[str, list[dict]] = {i: [] for i in ids}
+    if not ids or not kinds or not query.strip():
+        return found
+    for any_term in (False, True):
+        remaining = [i for i in ids if not found[i]]
+        match = build_match_query(query, any_term=any_term)
+        if not remaining or not match:
+            break
+        sql = f"""
+            SELECT s.id, s.video_id, s.kind, s.start, s.end, s.page,
+                   highlight(segments_fts, 0, '{MARK_OPEN}', '{MARK_CLOSE}') AS hl
+            FROM segments_fts JOIN segments s ON s.id = segments_fts.rowid
+            WHERE segments_fts MATCH ?
+              AND s.video_id IN ({",".join("?" * len(remaining))})
+              AND s.kind IN ({",".join("?" * len(kinds))})
+            ORDER BY s.video_id, COALESCE(s.page, 0), COALESCE(s.start, 0), s.id
+        """
+        try:
+            with db.connect() as conn:
+                rows = conn.execute(sql, (match, *remaining, *kinds)).fetchall()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e):
+                raise
+            log.warning("requête FTS segments rejetée : %s", e)
+            break
+        for r in rows:
+            lst = found[r["video_id"]]
+            if per_video is None or len(lst) < per_video:
+                lst.append(dict(r))
+    return found
+
+
+def _public_hit(r: dict, match: bool = True) -> dict:
+    return {"kind": r["kind"], "start": r["start"], "end": r["end"], "page": r["page"],
+            "text": r.get("hl", r.get("text", "")), "match": match}
+
+
+def segment_hits_many(db: Database, ids: list[str], query: str, kinds: list[str] | None = None,
+                      per_video: int = 30) -> dict[str, list[dict]]:
+    found = _segment_matches(db, ids, query, kinds or ["transcript", "ocr"], per_video)
+    return {vid: [_public_hit(r) for r in rows] for vid, rows in found.items()}
+
+
 def segment_hits(
     db: Database, video_id: str, query: str, kinds: list[str] | None = None, limit: int = 30,
     all_segments: bool = False,
 ) -> list[dict]:
     """Segments d'une vidéo qui correspondent à la requête, surlignés, triés par moment/page.
-
-    Les mots d'une requête peuvent être répartis sur plusieurs phrases : si aucun segment ne
-    contient *tous* les mots, on se rabat sur les segments qui en contiennent au moins un.
-    Avec ``all_segments``, renvoie tous les segments (les correspondants étant surlignés).
-    """
+    Avec ``all_segments``, renvoie tous les segments (les correspondants étant surlignés)."""
     kinds = kinds or ["transcript", "ocr"]
-    rows: dict[int, dict] = {}
-    for any_term in (False, True):
-        match = build_match_query(query, any_term=any_term) if query.strip() else ""
-        if not match:
-            break
-        sql = f"""
-            SELECT s.*, highlight(segments_fts, 0, '{MARK_OPEN}', '{MARK_CLOSE}') AS hl
-            FROM segments_fts JOIN segments s ON s.id = segments_fts.rowid
-            WHERE segments_fts MATCH ? AND s.video_id = ? AND s.kind IN ({",".join("?" * len(kinds))})
-            ORDER BY COALESCE(s.page, 0), COALESCE(s.start, 0) LIMIT ?
-        """
-        with db.connect() as conn:
-            rows = {r["id"]: dict(r) for r in conn.execute(sql, (match, video_id, *kinds, limit if not all_segments else 100000))}
-        if rows:
-            break
     if not all_segments:
-        out = list(rows.values())
-    else:
-        out = []
-        for seg in db.get_segments(video_id):
-            if seg["kind"] in kinds:
-                hit = rows.get(seg["id"])
-                seg["hl"] = hit["hl"] if hit else seg["text"]
-                seg["match"] = bool(hit)
-                out.append(seg)
-    return [
-        {"kind": r["kind"], "start": r["start"], "end": r["end"], "page": r["page"], "text": r["hl"],
-         "match": r.get("match", True)}
-        for r in out
-    ]
+        return segment_hits_many(db, [video_id], query, kinds, limit)[video_id]
+    hits = {r["id"]: r for r in _segment_matches(db, [video_id], query, kinds, None)[video_id]}
+    out = []
+    for seg in db.get_segments(video_id):
+        if seg["kind"] in kinds:
+            hit = hits.get(seg["id"])
+            out.append(_public_hit({**seg, "hl": hit["hl"] if hit else seg["text"]}, bool(hit)))
+    return out
 
 
 def search(
@@ -139,15 +168,22 @@ def search(
     order = "v.favorited_at DESC" if sort == "date" else "score"
     sql = f"""
         SELECT v.*, bm25(videos_fts, 0, {weights}) AS score, {snippets}
-        FROM videos_fts JOIN videos v ON v.id = videos_fts.id
+        FROM videos_fts JOIN videos v ON v.rowid = videos_fts.rowid
         WHERE {where}
         ORDER BY {order}
         LIMIT ? OFFSET ?
     """
     results = []
-    with db.connect() as conn:
-        rows = [dict(r) for r in conn.execute(sql, (*params, limit, offset))]
+    try:
+        with db.connect() as conn:
+            rows = [dict(r) for r in conn.execute(sql, (*params, limit, offset))]
+    except sqlite3.OperationalError as e:
+        if "locked" in str(e) or "no such table" in str(e):
+            raise
+        log.warning("requête FTS rejetée (%r → %r) : %s", query, match, e)
+        return []
     seg_kinds = [SEGMENT_KIND[c] for c in cols if c in SEGMENT_KIND]
+    all_hits = segment_hits_many(db, [r["id"] for r in rows], query, seg_kinds) if seg_kinds else {}
     for row in rows:
         matches = {c: row.pop(f"s_{c}") for c in FTS_COLUMNS}
         matches = {c: s for c, s in matches.items() if s and MARK_OPEN in s and c in cols}
@@ -156,6 +192,6 @@ def search(
             row["images"] = json.loads(row.get("images") or "[]")
         except json.JSONDecodeError:
             row["images"] = []
-        hits = segment_hits(db, row["id"], query, seg_kinds) if seg_kinds else []
+        hits = all_hits.get(row["id"], [])
         results.append(SearchResult(video=row, score=-score, matches=matches, hits=hits))
     return results

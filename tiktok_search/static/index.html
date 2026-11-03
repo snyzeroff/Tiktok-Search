@@ -36,6 +36,7 @@
   .result.selected { border-color:var(--accent2); }
   .select { position:absolute; top:10px; right:12px; width:18px; height:18px; accent-color:var(--accent2); cursor:pointer; }
   .thumb { width:96px; height:128px; flex:none; border-radius:10px; background:#222 center/cover; position:relative; cursor:pointer; border:0; padding:0; }
+  .thumb img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; border-radius:10px; }
   .thumb .badge { position:absolute; left:6px; bottom:6px; background:#000c; color:#fff; font-size:11px; border-radius:6px; padding:1px 6px; font-weight:600; }
   .thumb .play { position:absolute; inset:0; display:grid; place-items:center; font-size:28px; opacity:0; transition:opacity .2s; background:#0006; border-radius:10px; }
   .thumb:hover .play { opacity:1; }
@@ -172,11 +173,26 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 const hl = s => esc(s).replaceAll("\x02", "<mark>").replaceAll("\x03", "</mark>");
 const fmt = t => t == null ? "" : `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 const toast = m => { const d = Object.assign(document.createElement("div"), { className: "toast", textContent: m }); document.body.append(d); setTimeout(() => d.remove(), 2200); };
-let labels = {}, features = {}, lastResults = [], selected = new Set(), lastQuery = "";
+let labels = {}, features = {}, lastResults = [], selected = new Set(), lastQuery = "", refreshTimer = null, searchSeq = 0, pageSize = 50, hasMore = false;
+
+// Appels API : en-tête anti-CSRF sur les POST, erreurs lisibles.
+async function api(url, opts = {}) {
+  const o = { ...opts, headers: { ...(opts.headers || {}) } };
+  if (o.method && o.method !== "GET") o.headers["X-TTS"] = "1";
+  let r;
+  try { r = await fetch(url, o); } catch { throw new Error("Serveur injoignable — est-il toujours lancé ?"); }
+  let data = null;
+  try { data = await r.json(); } catch { /* réponse non JSON */ }
+  if (!r.ok) throw new Error((data && (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail))) || `Erreur ${r.status}`);
+  return data;
+}
 
 // ---------- statut ----------
 async function refresh() {
-  const r = await fetch("/api/status").then(r => r.json());
+  clearTimeout(refreshTimer);  // une seule boucle de rafraîchissement, quel que soit l'appelant
+  let r;
+  try { r = await api("/api/status"); }
+  catch (e) { $("#stats").textContent = "⚠️ " + e.message; refreshTimer = setTimeout(refresh, 5000); return; }
   labels = r.fields; features = r.features;
   if (!$("#fieldboxes").childElementCount) {
     $("#fieldboxes").innerHTML = '<span>Chercher dans : </span>' + Object.entries(labels).map(([k, v]) =>
@@ -184,22 +200,27 @@ async function refresh() {
   }
   const s = r.stats, j = r.job, f = r.features;
   $("#stats").innerHTML = `<span><b>${s.total}</b> favoris (${s.videos} vidéos, ${s.carousels} carrousels)</span><span><b>${s.done}</b> indexés</span>
-    <span><b>${s.with_transcript}</b> transcrits</span><span><b>${s.analysed}</b> analysés</span><span><b>${s.pending}</b> en attente</span><span><b>${s.error}</b> erreurs</span>
+    <span><b>${s.with_transcript}</b> transcrits</span><span><b>${s.analysed}</b> analysés</span><span><b>${s.pending}</b> en attente</span><span><b>${s.error}</b> erreurs</span>${s.unavailable ? `<span><b>${s.unavailable}</b> indisponibles</span>` : ""}
     <span>Whisper ${f.whisper ? "✅" : "—"} · OCR ${f.ocr ? "✅" : "—"} · IA ${f.llm !== "none" ? "✅ " + esc(f.llm_model) : "— (extraction locale seule)"} · TikTok ${f.tiktok_connected ? "connecté ✅" : (f.tiktok_oauth ? "non connecté" : "non configuré")}</span>`;
+  if (!f.ffmpeg && (f.whisper || f.ocr)) $("#stats").innerHTML += `<span style="color:var(--accent)">⚠️ ffmpeg introuvable : transcription et OCR impossibles</span>`;
+  if (j.running || j.message) $("#stats").innerHTML += `<span>${j.running ? `Indexation ${j.done}/${j.total}… <button class="ghost" id="cancelJob">Arrêter</button>` : ""} ${esc(j.message)}</span>`;
+  $("#cancelJob")?.addEventListener("click", () => post("/api/process/cancel"));
   $("#progressbar").hidden = !j.running;
   if (j.running) $("#progressbar div").style.width = (100 * j.done / Math.max(1, j.total)) + "%";
-  setTimeout(refresh, j.running ? 2000 : 10000);
+  refreshTimer = setTimeout(refresh, j.running ? 2000 : 10000);
 }
 
 // ---------- recherche ----------
-async function doSearch(e) {
-  e?.preventDefault();
+async function doSearch(e, more = false) {
+  e?.preventDefault?.();
   const q = $("#q").value.trim(); lastQuery = q;
-  const p = new URLSearchParams();
+  const seq = ++searchSeq;
+  const p = new URLSearchParams({ limit: pageSize, offset: more ? lastResults.length : 0 });
   let url;
   if (q) {
     p.set("q", q);
     const boxes = [...document.querySelectorAll('input[name=field]')];
+    if (!boxes.some(b => b.checked)) { $("#results").innerHTML = `<p class="empty">Coche au moins un champ où chercher.</p>`; return; }
     if (boxes.some(b => !b.checked)) boxes.filter(b => b.checked).forEach(b => p.append("field", b.value));
     if ($("#any").checked) p.set("any", "true");
     p.set("sort", $("#sort").value);
@@ -207,8 +228,11 @@ async function doSearch(e) {
   } else url = "/api/videos?";
   if ($("#kind").value) p.set("kind", $("#kind").value);
   history.replaceState(null, "", q ? "?q=" + encodeURIComponent(q) : location.pathname);
-  const r = await fetch(url + p).then(r => r.json());
-  lastResults = r.results;
+  let r;
+  try { r = await api(url + p); } catch (err) { if (seq === searchSeq) $("#results").innerHTML = `<p class="empty">⚠️ ${esc(err.message)}</p>`; return; }
+  if (seq !== searchSeq) return;  // une recherche plus récente est déjà partie
+  lastResults = more ? lastResults.concat(r.results) : r.results;
+  hasMore = r.results.length === pageSize;
   renderResults(q);
 }
 
@@ -223,13 +247,13 @@ function hitChip(v, h) {
 function renderResults(q) {
   const res = lastResults;
   if (!res.length) { $("#results").innerHTML = `<p class="empty">${q ? "Aucun résultat." : "Aucune vidéo indexée pour l'instant — ajoute tes favoris ci-dessus."}</p>`; return; }
-  $("#results").innerHTML = `<p class="muted">${q ? res.length + " résultat(s)" : "Derniers favoris"}</p>` + res.map(v => {
+  $("#results").innerHTML = `<p class="muted">${q ? res.length + (hasMore ? "+" : "") + " résultat(s)" : "Derniers favoris"}</p>` + res.map(v => {
     const badge = v.kind === "photo" ? `Carrousel · ${v.images.length} p.` : (v.duration ? fmt(v.duration) : "Vidéo");
     const hits = v.hits || [];
     const shown = hits.slice(0, 8);
     return `<div class="card result ${selected.has(v.id) ? "selected" : ""}" data-id="${esc(v.id)}">
       <input type="checkbox" class="select" data-sel="${esc(v.id)}" ${selected.has(v.id) ? "checked" : ""} title="Sélectionner pour l'analyse">
-      <button class="thumb" data-open="${esc(v.id)}" style="background-image:url('${esc(v.thumbnail)}')"><span class="play">${v.kind === "photo" ? "🖼" : "▶"}</span><span class="badge">${badge}</span></button>
+      <button class="thumb" data-open="${esc(v.id)}">${v.thumbnail ? `<img src="${esc(v.thumbnail)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}<span class="play">${v.kind === "photo" ? "🖼" : "▶"}</span><span class="badge">${badge}</span></button>
       <div class="body">
         <h3><a data-open="${esc(v.id)}">@${esc(v.author || "inconnu")}</a> <span class="muted small" style="font-weight:400">${esc(v.favorited_at)}</span></h3>
         ${v.matches.description ? "" : `<p class="desc">${esc((v.description || "").slice(0, 180))}</p>`}
@@ -237,10 +261,11 @@ function renderResults(q) {
           .map(([k, s]) => `<p class="match"><span class="tag">${esc(labels[k] || k)}</span>${hl(s)}</p>`).join("")}
         ${shown.length ? `<div class="chips">${shown.map(h => hitChip(v, h)).join("")}${hits.length > shown.length ? `<button class="chip" data-open="${esc(v.id)}" data-tab="transcript">+${hits.length - shown.length} autres</button>` : ""}</div>` : ""}
       </div></div>`;
-  }).join("");
+  }).join("") + (hasMore ? `<div class="row" style="justify-content:center"><button class="secondary" id="more">Charger plus</button></div>` : "");
 }
 
 $("#results").addEventListener("click", e => {
+  if (e.target.id === "more") { e.target.disabled = true; doSearch(null, true); return; }
   const sel = e.target.closest("[data-sel]");
   if (sel) { toggleSel(sel.dataset.sel, sel.checked); return; }
   const o = e.target.closest("[data-open]");
@@ -258,18 +283,16 @@ $("#selAll").onclick = () => lastResults.forEach(v => { toggleSel(v.id, true); c
 $("#selClear").onclick = () => { [...selected].forEach(id => toggleSel(id, false)); document.querySelectorAll("[data-sel]").forEach(c => c.checked = false); };
 $("#analyzeSel").onclick = () => runAnalysis([...selected], $("#mode").value);
 
-async function runAnalysis(ids, mode, force = false, target = null) {
+async function runAnalysis(ids, mode, force = false, target = null, cachedOnly = false) {
   const btns = document.querySelectorAll("#analyzeSel, .an-run"); btns.forEach(b => b.disabled = true);
   const box = target || $("#adlgBody");
   if (!target) { $("#adlgTitle").textContent = `Analyse de ${ids.length} publication(s)`; $("#adlgActions").innerHTML = closeBtn("adlg"); $("#adlg").showModal(); }
   box.innerHTML = `<p class="muted">Analyse en cours… (${ids.length} publication(s), mode ${esc(mode)}${mode === "screens" ? " — téléchargement et sélection des captures" : ""})</p>`;
   try {
-    const r = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids, mode, force }) });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || "Erreur");
+    const data = await api("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids, mode, force, cached_only: cachedOnly }) });
     box.innerHTML = renderAnalysis(data, ids.length === 1);
     if (!target) {
-      const q = `ids=${ids.join(",")}&mode=${mode}`;
+      const q = `ids=${ids.map(encodeURIComponent).join(",")}&mode=${encodeURIComponent(mode)}`;
       $("#adlgActions").innerHTML = `<a class="btn secondary" href="/api/analyze/export?${q}&format=md">Markdown</a><a class="btn secondary" href="/api/analyze/export?${q}&format=csv">CSV</a><a class="btn secondary" href="/api/analyze/export?${q}&format=json" target="_blank">JSON</a>` + closeBtn("adlg");
     }
     refresh();
@@ -334,7 +357,9 @@ let cur = null; // {video, segments, analysis, page, pendingSeek, tab}
 
 async function openVideo(id, pos, tab) {
   const q = lastQuery;
-  const data = await fetch(`/api/video/${encodeURIComponent(id)}?q=${encodeURIComponent(q)}`).then(r => r.json());
+  let data;
+  try { data = await api(`/api/video/${encodeURIComponent(id)}?q=${encodeURIComponent(q)}`); }
+  catch (err) { toast(err.message); return; }
   cur = { ...data, page: 1, pendingSeek: null, ready: false, filter: q };
   const v = data.video;
   $("#dlgTitle").innerHTML = `<b>@${esc(v.author || "inconnu")}</b> <span class="muted small">${v.kind === "photo" ? `Carrousel · ${v.images.length} pages` : (v.duration ? fmt(v.duration) : "")}</span>`;
@@ -426,7 +451,7 @@ function showTab(tab) {
       <div class="seglist">${segs.length ? segs.map(s => `<div class="seg ${s.match ? "hit" : ""}" data-start="${s.start ?? ""}" data-end="${s.end ?? ""}" data-page="${s.page ?? ""}" data-pos="${s.page ? "page:" + s.page : "t:" + s.start}">
         <span class="tc">${s.page ? "Page " + s.page : fmt(s.start)}</span><span class="tx">${hl(s.text)}</span></div>`).join("")
         : `<p class="empty">${tab === "transcript" ? (v.kind === "photo" ? "Un carrousel n'a pas de transcription." : "Pas de transcription (pas de sous-titres TikTok, et Whisper n'est pas installé).") : "Pas de texte détecté (OCR désactivé ou rien d'écrit)."}</p>`}</div>`;
-    $("#segfilter").onchange = async e => { cur.filter = e.target.value; const d = await fetch(`/api/video/${encodeURIComponent(v.id)}?q=${encodeURIComponent(cur.filter)}`).then(r => r.json()); cur.segments = d.segments; showTab(tab); };
+    $("#segfilter").onchange = async e => { cur.filter = e.target.value; try { const d = await api(`/api/video/${encodeURIComponent(v.id)}?q=${encodeURIComponent(cur.filter)}`); cur.segments = d.segments; showTab(tab); } catch (err) { toast(err.message); } };
     $("#copyseg").onclick = () => { navigator.clipboard.writeText(segs.map(s => `[${s.page ? "p." + s.page : fmt(s.start)}] ${s.text.replace(/[\x02\x03]/g, "")}`).join("\n")); toast("Copié"); };
     let hitIdx = -1;
     $("#nexthit")?.addEventListener("click", e => { e.preventDefault(); const hits = [...document.querySelectorAll(".seg.hit")]; if (!hits.length) return; hitIdx = (hitIdx + 1) % hits.length; hits[hitIdx].scrollIntoView({ block: "center" }); goTo(hits[hitIdx].dataset.pos); });
@@ -439,18 +464,21 @@ function showTab(tab) {
         <button class="an-run secondary" data-mode="screens">Analyser avec smart screens</button>
       </div><div id="anbox">${cur.analysis ? "" : `<p class="muted">Pas encore analysée. L'extraction des liens, @comptes et codes promo est gratuite ; l'IA ${features.llm !== "none" ? `(${esc(features.llm_model)})` : "n'est pas configurée"} complète avec les outils, sites, produits, étapes…</p>`}</div>`;
     document.querySelectorAll(".an-run").forEach(b => b.onclick = () => runAnalysis([v.id], b.dataset.mode, false, $("#anbox")));
-    if (cur.analysis) runAnalysis([v.id], cur.analysis.mode, false, $("#anbox"));
+    // Affiche l'analyse déjà faite sans jamais refacturer (cached_only).
+    if (cur.analysis) runAnalysis([v.id], cur.analysis.mode, false, $("#anbox"), true);
   } else {
     $("#tabbody").innerHTML = `<p style="white-space:pre-wrap">${esc(v.description) || '<span class="muted">Pas de légende.</span>'}</p>
       <p class="muted">${esc(v.hashtags)}</p>
       ${v.entities ? `<p><span class="tag">outils & sites</span>${esc(v.entities)}</p>` : ""}
       <p class="muted small">Ajoutée aux favoris : ${esc(v.favorited_at || "?")} · ID ${esc(v.id)}</p>
       <div class="row"><a class="btn" href="${esc(v.url)}" target="_blank" rel="noopener">Ouvrir sur TikTok ↗</a>
-      <button class="secondary" onclick="navigator.clipboard.writeText('${esc(v.url)}');toast('Lien copié')">Copier le lien</button></div>`;
+      <button class="secondary" data-copy="${esc(v.url)}">Copier le lien</button></div>`;
   }
 }
 $("#tabs").addEventListener("click", e => { const b = e.target.closest("[data-tab]"); if (b) showTab(b.dataset.tab); });
-$("#tabbody").addEventListener("click", e => { const o = e.target.closest("[data-open]"); if (o && cur) { if (o.dataset.open === cur.video.id) goTo(o.dataset.pos); else openVideo(o.dataset.open, o.dataset.pos); } });
+$("#tabbody").addEventListener("click", e => {
+  const c = e.target.closest("[data-copy]");
+  if (c) { navigator.clipboard?.writeText(c.dataset.copy).then(() => toast("Lien copié"), () => toast("Copie impossible")); return; } const o = e.target.closest("[data-open]"); if (o && cur) { if (o.dataset.open === cur.video.id) goTo(o.dataset.pos); else openVideo(o.dataset.open, o.dataset.pos); } });
 document.addEventListener("keydown", e => {
   if (e.key === "/" && document.activeElement.tagName !== "INPUT" && document.activeElement.tagName !== "TEXTAREA") { e.preventDefault(); $("#q").focus(); }
   if (cur && cur.video.kind === "photo" && $("#dlg").open && document.activeElement.tagName !== "INPUT") {
@@ -461,9 +489,12 @@ document.addEventListener("keydown", e => {
 
 // ---------- imports ----------
 async function post(url, body) {
-  const r = await fetch(url, { method: "POST", body });
-  const j = await r.json();
-  $("#msg").textContent = r.ok ? (j.found !== undefined ? `${j.found} publication(s) trouvée(s), ${j.added} nouvelle(s). Indexation en cours…` : JSON.stringify(j)) : (j.detail || "Erreur");
+  $("#msg").textContent = "…";
+  try {
+    const j = await api(url, { method: "POST", body });
+    $("#msg").textContent = j.found !== undefined ? `${j.found} publication(s) trouvée(s), ${j.added} nouvelle(s).${j.added ? " Indexation en cours…" : ""}`
+      : j.status ? `TikTok : ${j.status}` : j.cancelling !== undefined ? "Arrêt demandé…" : j.started === false ? "Une indexation est déjà en cours : elle prendra aussi ces vidéos." : "C'est parti.";
+  } catch (err) { $("#msg").textContent = "⚠️ " + err.message; }
   refresh();
 }
 $("#search").onsubmit = doSearch;
