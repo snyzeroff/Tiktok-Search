@@ -6,12 +6,14 @@ import threading
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
-from . import importer, ocr, pipeline, tiktok_oauth, transcribe
+from . import analyze, importer, ocr, pipeline, tiktok_oauth, transcribe
 from .config import get_settings
 from .db import FTS_COLUMNS, Database
-from .search import FIELD_LABELS, search
+from .search import FIELD_LABELS, search, segment_hits
 
 settings = get_settings()
 db = Database(settings.db_path)
@@ -19,6 +21,7 @@ job = pipeline.Job()
 STATIC = Path(__file__).parent / "static"
 
 app = FastAPI(title="TikTok Search")
+app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
 _oauth_states: set[str] = set()
 
 
@@ -49,6 +52,9 @@ def status() -> dict:
             "ocr": settings.ocr and ocr.is_available(),
             "tiktok_oauth": bool(settings.tiktok_client_key),
             "tiktok_connected": tiktok_oauth.is_connected(db),
+            "llm": settings.llm_provider if settings.llm_provider in analyze.PROVIDERS else "none",
+            "llm_model": analyze.model_name(settings),
+            "keep_video": settings.keep_video,
         },
         "fields": FIELD_LABELS,
     }
@@ -81,32 +87,96 @@ def process(retry_errors: bool = False) -> dict:
     return {"started": _start_processing(retry_errors)}
 
 
+@app.post("/api/reindex")
+def reindex() -> dict:
+    n = db.reset_all()
+    return {"reset": n, "started": _start_processing()}
+
+
+def _public(v: dict) -> dict:
+    return {
+        "id": v["id"],
+        "kind": v.get("kind") or "video",
+        "url": importer.canonical_url(v["id"], v.get("author") or "", v.get("kind") or "video"),
+        "author": v.get("author") or "",
+        "description": v.get("description") or "",
+        "hashtags": v.get("hashtags") or "",
+        "thumbnail": v.get("thumbnail") or "",
+        "images": v.get("images") or [],
+        "media_path": v.get("media_path") or "",
+        "duration": v.get("duration"),
+        "favorited_at": v.get("favorited_at") or "",
+        "entities": v.get("entities") or "",
+    }
+
+
 @app.get("/api/search")
 def api_search(
     q: str,
     field: list[str] = Query(default=[]),
     any: bool = False,
+    kind: str = "",
+    sort: str = "relevance",
     limit: int = Query(50, le=200),
     offset: int = 0,
 ) -> dict:
     fields = [f for f in field if f in FTS_COLUMNS] or None
-    results = search(db, q, fields=fields, any_term=any, limit=limit, offset=offset)
+    results = search(db, q, fields=fields, any_term=any, limit=limit, offset=offset, kind=kind or None, sort=sort)
     return {
         "query": q,
-        "results": [
-            {
-                "id": r.video["id"],
-                "url": importer.canonical_url(r.video["id"]),
-                "author": r.video["author"],
-                "description": r.video["description"],
-                "thumbnail": r.video["thumbnail"],
-                "favorited_at": r.video["favorited_at"],
-                "score": round(r.score, 3),
-                "matches": r.matches,
-            }
-            for r in results
-        ],
+        "results": [{**_public(r.video), "score": round(r.score, 3), "matches": r.matches, "hits": r.hits}
+                    for r in results],
     }
+
+
+@app.get("/api/videos")
+def api_videos(kind: str = "", limit: int = Query(60, le=200), offset: int = 0) -> dict:
+    return {"results": [{**_public(v), "matches": {}, "hits": []}
+                        for v in db.list_videos(limit=limit, offset=offset, kind=kind or None)]}
+
+
+@app.get("/api/video/{video_id}")
+def api_video(video_id: str, q: str = "") -> dict:
+    video = db.get_video(video_id)
+    if not video:
+        raise HTTPException(404, "Vidéo inconnue")
+    segs = segment_hits(db, video_id, q, all_segments=True) if q.strip() else [
+        {**s, "match": False} for s in db.get_segments(video_id)]
+    latest = db.latest_analysis(video_id)
+    return {"video": _public(video), "segments": segs, "analysis": latest["result"] if latest else None}
+
+
+class AnalyzeRequest(BaseModel):
+    ids: list[str]
+    mode: str = "text"   # text | screens | auto
+    force: bool = False
+
+
+@app.post("/api/analyze")
+def api_analyze(req: AnalyzeRequest) -> dict:
+    if not req.ids:
+        raise HTTPException(400, "Aucune vidéo sélectionnée")
+    if len(req.ids) > 50:
+        raise HTTPException(400, "50 vidéos maximum par analyse")
+    if req.mode not in ("text", "screens", "auto"):
+        raise HTTPException(400, "mode invalide")
+    try:
+        return analyze.analyze_many(db, settings, req.ids, req.mode, req.force)
+    except KeyError as e:
+        raise HTTPException(404, f"Vidéo inconnue : {e}") from e
+
+
+@app.get("/api/analyze/export")
+def api_analyze_export(ids: str, format: str = "md", mode: str = "text"):
+    id_list = [i for i in ids.split(",") if i]
+    data = analyze.analyze_many(db, settings, id_list, mode)
+    if format == "json":
+        return data
+    if format == "csv":
+        return PlainTextResponse(analyze.to_csv(data["aggregate"]), media_type="text/csv; charset=utf-8",
+                                 headers={"Content-Disposition": 'attachment; filename="analyse-tiktok.csv"'})
+    return PlainTextResponse(analyze.to_markdown(data["aggregate"]), media_type="text/markdown; charset=utf-8",
+                             headers={"Content-Disposition": 'attachment; filename="analyse-tiktok.md"'})
 
 
 # --- Connexion TikTok ---------------------------------------------------------

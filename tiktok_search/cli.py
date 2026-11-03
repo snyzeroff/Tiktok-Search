@@ -6,7 +6,7 @@ import argparse
 import logging
 import sys
 
-from . import importer, ocr, pipeline, transcribe
+from . import analyze, importer, ocr, pipeline, transcribe
 from .config import get_settings
 from .db import Database
 from .search import FIELD_LABELS, MARK_CLOSE, MARK_OPEN, search
@@ -31,7 +31,15 @@ def main(argv: list[str] | None = None) -> int:
 
     s = sub.add_parser("process", help="Récupérer légendes, transcriptions et texte à l'écran")
     s.add_argument("--retry-errors", action="store_true")
+    s.add_argument("--all", action="store_true", help="Tout réindexer (après une mise à jour par ex.)")
     s.add_argument("--limit", type=int)
+
+    s = sub.add_parser("analyze", help="Analyser une ou plusieurs vidéos (outils, sites, produits…)")
+    s.add_argument("ids", nargs="+", help="ID ou liens des vidéos")
+    s.add_argument("--mode", choices=["text", "screens", "auto"], default="text",
+                   help="text = le moins cher ; screens = + captures d'écran sélectionnées")
+    s.add_argument("--force", action="store_true", help="Ignorer le cache")
+    s.add_argument("--format", choices=["md", "csv", "json"], default="md")
 
     s = sub.add_parser("search", help="Rechercher un ou plusieurs mots-clés")
     s.add_argument("query", nargs="+")
@@ -61,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
         added = pipeline.import_items(db, items, "links")
         print(f"{len(items)} liens reconnus, {added} nouveaux.")
     elif args.cmd == "process":
+        if args.all:
+            print(f"{db.reset_all()} vidéos remises en attente.")
         print(f"Transcription Whisper : {'oui' if transcribe.is_available() and settings.transcribe == 'auto' else 'non'}"
               f" · OCR : {'oui' if settings.ocr and ocr.is_available() else 'non'}")
 
@@ -72,15 +82,32 @@ def main(argv: list[str] | None = None) -> int:
         n = pipeline.process_all(db, settings, retry_errors=args.retry_errors, limit=args.limit,
                                  on_progress=progress)
         print(f"{n} vidéos traitées.")
+    elif args.cmd == "analyze":
+        ids = [importer.extract_video_id(x) or x for x in args.ids]
+        data = analyze.analyze_many(db, settings, ids, args.mode, args.force)
+        for r in data["results"]:
+            if r["error"]:
+                print(f"⚠️  {r['video_id']} : {r['error']}", file=sys.stderr)
+        if args.format == "json":
+            import json
+
+            print(json.dumps(data, ensure_ascii=False, indent=2))
+        else:
+            print(analyze.to_csv(data["aggregate"]) if args.format == "csv" else analyze.to_markdown(data["aggregate"]))
     elif args.cmd == "search":
         results = search(db, " ".join(args.query), fields=args.fields, any_term=args.any, limit=args.limit)
         if not results:
             print("Aucun résultat.")
         for r in results:
             v = r.video
-            print(f"\n{BOLD}@{v['author'] or '?'}{RESET}  {v['url'] if 'tiktok.com/@' in v['url'] else importer.canonical_url(v['id'])}")
+            print(f"\n{BOLD}@{v['author'] or '?'}{RESET}  {importer.canonical_url(v['id'], v['author'] or '', v['kind'] or 'video')}")
             for col, snip in r.matches.items():
+                if col in ("transcript", "ocr_text") and r.hits:
+                    continue
                 print(f"  [{FIELD_LABELS[col]}] {_hl(snip)}")
+            for h in r.hits[:8]:
+                where = f"page {h['page']}" if h["page"] else analyze.fmt_time(h["start"])
+                print(f"    {'🖼' if h['page'] else '▶'} {where:>7}  {_hl(h['text'])}")
     elif args.cmd == "stats":
         st = db.stats()
         print(f"{st['total']} vidéos · {st['done']} indexées · {st['pending']} en attente · "

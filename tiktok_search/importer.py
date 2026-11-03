@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-VIDEO_ID_RE = re.compile(r"(?:/video/|/v/|item_id=|share/video/)(\d{8,25})")
+VIDEO_ID_RE = re.compile(r"(?:/video/|/photo/|/v/|item_id=|share/video/)(\d{8,25})")
 
 FAVORITE_KEYS = ("favorite video", "favoritevideo")
 LIKE_KEYS = ("like list", "itemfavoritelist", "likelist")
@@ -35,9 +35,14 @@ def extract_video_id(url: str) -> str | None:
     return m.group(1) if m else None
 
 
-def canonical_url(video_id: str) -> str:
-    # TikTok redirige /@/video/<id> vers la bonne URL quel que soit l'auteur.
-    return f"https://www.tiktok.com/@/video/{video_id}"
+def canonical_url(video_id: str, author: str = "", kind: str = "video") -> str:
+    # TikTok redirige /@/video/<id> vers la bonne URL quel que soit l'auteur (et vers /photo/ pour un carrousel).
+    path = "photo" if kind == "photo" else "video"
+    return f"https://www.tiktok.com/@{author}/{path}/{video_id}"
+
+
+def kind_from_url(url: str) -> str:
+    return "photo" if "/photo/" in (url or "") else "video"
 
 
 def _norm(key: str) -> str:

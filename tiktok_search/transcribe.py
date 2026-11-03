@@ -1,13 +1,9 @@
-"""Transcription audio locale avec faster-whisper (optionnel : pip install '.[transcription]')."""
+"""Transcription audio locale et gratuite avec faster-whisper (pip install '.[transcription]')."""
 
 from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-
-
-class TranscriptionUnavailable(RuntimeError):
-    pass
 
 
 def is_available() -> bool:
@@ -20,13 +16,13 @@ def is_available() -> bool:
 
 @lru_cache(maxsize=2)
 def _model(name: str):
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError as e:  # pragma: no cover
-        raise TranscriptionUnavailable("faster-whisper n'est pas installé") from e
+    from faster_whisper import WhisperModel
+
     return WhisperModel(name, device="auto", compute_type="int8")
 
 
-def transcribe(audio_path: Path, model_name: str = "small") -> str:
+def transcribe_segments(audio_path: Path, model_name: str = "small") -> list[dict]:
+    """→ [{start, end, text}] en secondes."""
     segments, _info = _model(model_name).transcribe(str(audio_path), vad_filter=True)
-    return " ".join(seg.text.strip() for seg in segments).strip()
+    return [{"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()}
+            for s in segments if s.text.strip()]

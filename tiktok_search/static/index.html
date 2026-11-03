@@ -5,135 +5,476 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TikTok Search</title>
 <style>
-  :root { --bg:#0f0f12; --card:#1a1a20; --muted:#8b8b98; --text:#f2f2f5; --accent:#fe2c55; --accent2:#25f4ee; --mark:#fe2c5540; --border:#2a2a33; }
+  :root { --bg:#0f0f12; --card:#1a1a20; --card2:#22222a; --muted:#8b8b98; --text:#f2f2f5; --accent:#fe2c55; --accent2:#25f4ee; --mark:#fe2c5555; --border:#2a2a33; }
   * { box-sizing:border-box; }
   body { margin:0; font:15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); }
-  main { max-width:920px; margin:0 auto; padding:24px 16px 64px; }
+  main { max-width:980px; margin:0 auto; padding:24px 16px 120px; }
   h1 { font-size:28px; margin:0 0 4px; } h1 span { color:var(--accent); }
+  h2 { font-size:17px; margin:18px 0 8px; } h3 { font-size:15px; margin:0 0 4px; }
+  a { color:var(--accent2); }
   .sub { color:var(--muted); margin:0 0 20px; }
-  .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px; margin-bottom:16px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px; margin-bottom:14px; }
   .searchbar { display:flex; gap:8px; }
-  input[type=search], textarea { flex:1; background:#0b0b0e; border:1px solid var(--border); color:var(--text); border-radius:10px; padding:12px 14px; font-size:16px; width:100%; }
-  button, .btn { background:var(--accent); color:#fff; border:0; border-radius:10px; padding:10px 16px; font-weight:600; cursor:pointer; text-decoration:none; display:inline-block; font-size:14px; }
-  button.secondary, .btn.secondary { background:#2a2a33; }
-  .filters { display:flex; flex-wrap:wrap; gap:12px; margin-top:12px; color:var(--muted); font-size:14px; }
+  input[type=search], input[type=text], textarea, select { background:#0b0b0e; border:1px solid var(--border); color:var(--text); border-radius:10px; padding:10px 12px; font-size:15px; }
+  input[type=search] { flex:1; font-size:16px; padding:12px 14px; min-width:0; }
+  textarea { width:100%; }
+  button, .btn { background:var(--accent); color:#fff; border:0; border-radius:10px; padding:10px 16px; font-weight:600; cursor:pointer; text-decoration:none; display:inline-block; font-size:14px; white-space:nowrap; }
+  button.secondary, .btn.secondary { background:#2a2a33; color:var(--text); }
+  button.ghost { background:transparent; color:var(--muted); padding:6px 8px; }
+  button:disabled { opacity:.5; cursor:wait; }
+  .filters { display:flex; flex-wrap:wrap; gap:10px 14px; margin-top:12px; color:var(--muted); font-size:14px; align-items:center; }
   .filters label { display:flex; gap:6px; align-items:center; cursor:pointer; }
-  .stats { display:flex; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:14px; }
-  .stats b { color:var(--text); }
+  .filters select { padding:6px 8px; font-size:14px; }
+  .stats { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:14px; } .stats b { color:var(--text); }
   details summary { cursor:pointer; font-weight:600; }
-  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:12px; }
-  .result { display:flex; gap:14px; }
-  .thumb { width:84px; height:112px; flex:none; border-radius:8px; background:#222 center/cover; }
-  .result h3 { margin:0 0 4px; font-size:15px; } .result h3 a { color:var(--accent2); text-decoration:none; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; }
+  .muted { color:var(--muted); } .small { font-size:13px; }
+  .progress { height:6px; background:#2a2a33; border-radius:4px; overflow:hidden; margin-top:8px; }
+  .progress div { height:100%; background:var(--accent2); width:0; transition:width .4s; }
+
+  .result { display:flex; gap:14px; position:relative; }
+  .result.selected { border-color:var(--accent2); }
+  .select { position:absolute; top:10px; right:12px; width:18px; height:18px; accent-color:var(--accent2); cursor:pointer; }
+  .thumb { width:96px; height:128px; flex:none; border-radius:10px; background:#222 center/cover; position:relative; cursor:pointer; border:0; padding:0; }
+  .thumb .badge { position:absolute; left:6px; bottom:6px; background:#000c; color:#fff; font-size:11px; border-radius:6px; padding:1px 6px; font-weight:600; }
+  .thumb .play { position:absolute; inset:0; display:grid; place-items:center; font-size:28px; opacity:0; transition:opacity .2s; background:#0006; border-radius:10px; }
+  .thumb:hover .play { opacity:1; }
+  .body { min-width:0; flex:1; padding-right:24px; }
+  .body h3 a { color:var(--accent2); text-decoration:none; cursor:pointer; }
   .desc { color:var(--muted); font-size:14px; margin:0 0 6px; overflow-wrap:anywhere; }
   .match { font-size:14px; margin:4px 0; overflow-wrap:anywhere; }
   .tag { display:inline-block; font-size:11px; text-transform:uppercase; letter-spacing:.04em; background:#2a2a33; color:var(--muted); border-radius:6px; padding:1px 6px; margin-right:6px; }
   mark { background:var(--mark); color:var(--text); border-radius:3px; padding:0 2px; }
-  .muted { color:var(--muted); } .progress { height:6px; background:#2a2a33; border-radius:4px; overflow:hidden; margin-top:8px; }
-  .progress div { height:100%; background:var(--accent2); width:0; transition:width .4s; }
-  @media (max-width:560px) { .thumb { width:64px; height:86px; } .searchbar { flex-direction:column; } }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .chip { background:var(--card2); border:1px solid var(--border); color:var(--text); border-radius:999px; padding:3px 10px; font-size:13px; cursor:pointer; max-width:100%; text-align:left; font-weight:400; display:inline-flex; gap:6px; align-items:baseline; }
+  .chip:hover { border-color:var(--accent2); }
+  .chip b { color:var(--accent2); font-variant-numeric:tabular-nums; }
+  .chip .t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:340px; }
+
+  [hidden] { display:none !important; }
+  .selbar { position:fixed; left:50%; transform:translateX(-50%); bottom:16px; background:#111116f2; border:1px solid var(--accent2); border-radius:14px; padding:10px 14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; z-index:5; max-width:calc(100% - 24px); backdrop-filter:blur(6px); }
+
+  dialog { width:min(1200px, 100vw - 24px); max-height:calc(100vh - 24px); padding:0; border:1px solid var(--border); border-radius:16px; background:var(--card); color:var(--text); }
+  dialog::backdrop { background:#000b; }
+  .dlg-head { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--card); z-index:2; }
+  .dlg-body { display:grid; grid-template-columns:minmax(260px, 420px) 1fr; gap:16px; padding:16px; }
+  .player { position:sticky; top:70px; align-self:start; }
+  .player video, .player iframe { width:100%; aspect-ratio:9/16; max-height:72vh; border:0; border-radius:12px; background:#000; display:block; }
+  .carousel { position:relative; }
+  .carousel img { width:100%; max-height:70vh; object-fit:contain; border-radius:12px; background:#000; display:block; }
+  .carousel .nav { position:absolute; top:50%; transform:translateY(-50%); background:#000a; border-radius:50%; width:38px; height:38px; padding:0; font-size:18px; }
+  .carousel .prev { left:8px; } .carousel .next { right:8px; }
+  .pages { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .pages button { padding:4px 10px; background:#2a2a33; font-weight:500; }
+  .pages button.on { background:var(--accent2); color:#000; }
+  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:12px; flex-wrap:wrap; }
+  .tabs button { background:transparent; color:var(--muted); border-radius:8px 8px 0 0; }
+  .tabs button.on { color:var(--text); box-shadow:inset 0 -2px 0 var(--accent); }
+  .seglist { max-height:62vh; overflow:auto; padding-right:6px; }
+  .seg { display:flex; gap:10px; padding:5px 8px; border-radius:8px; cursor:pointer; align-items:baseline; }
+  .seg:hover { background:var(--card2); }
+  .seg.hit { background:#fe2c5514; }
+  .seg.active { outline:1px solid var(--accent2); }
+  .seg .tc { color:var(--accent2); font-variant-numeric:tabular-nums; flex:none; min-width:52px; font-size:13px; }
+  .seg .tx { overflow-wrap:anywhere; }
+  .an-sec { margin-bottom:14px; }
+  .an-item { padding:8px 10px; border-radius:10px; background:var(--card2); margin-bottom:6px; }
+  .an-item .chips { margin-top:4px; }
+  .screens { display:grid; grid-template-columns:repeat(auto-fill, minmax(90px, 1fr)); gap:8px; }
+  .screens figure { margin:0; cursor:pointer; } .screens img { width:100%; border-radius:8px; display:block; }
+  .screens figcaption { font-size:12px; color:var(--accent2); text-align:center; }
+  .empty { color:var(--muted); padding:20px 0; text-align:center; }
+  .toast { position:fixed; top:16px; left:50%; transform:translateX(-50%); background:#25f4ee; color:#000; padding:8px 14px; border-radius:10px; font-weight:600; z-index:20; }
+  @media (max-width:760px) {
+    .dlg-body { grid-template-columns:1fr; } .player { position:static; }
+    .player video, .player iframe { max-height:55vh; }
+    .thumb { width:72px; height:96px; } .searchbar { flex-direction:column; }
+  }
 </style>
 </head>
 <body>
 <main>
   <h1>TikTok <span>Search</span></h1>
-  <p class="sub">Retrouve n'importe quelle vidéo de tes favoris grâce à sa légende, ses hashtags, ce qui y est dit ou écrit à l'écran.</p>
+  <p class="sub">Retrouve n'importe quelle vidéo ou carrousel de tes favoris grâce à sa légende, ses hashtags, ce qui y est dit ou écrit — et va directement au bon moment.</p>
 
   <div class="card">
     <form id="search" class="searchbar">
-      <input type="search" id="q" placeholder='ex : recette pâtes  ·  "plan de travail"  ·  #astuce -pub' autofocus>
+      <input type="search" id="q" placeholder='ex : recette pâtes  ·  "plan de travail"  ·  #astuce -pub   (raccourci : /)' autofocus>
       <button>Rechercher</button>
     </form>
-    <div class="filters" id="filters"></div>
+    <div class="filters" id="filters">
+      <span id="fieldboxes"></span>
+      <label><input type="checkbox" id="any"> au moins un des mots</label>
+      <select id="kind"><option value="">Vidéos + carrousels</option><option value="video">Vidéos</option><option value="photo">Carrousels</option></select>
+      <select id="sort"><option value="relevance">Pertinence</option><option value="date">Date d'ajout</option></select>
+    </div>
   </div>
 
   <div class="card">
     <div class="stats" id="stats">Chargement…</div>
     <div class="progress" id="progressbar" hidden><div></div></div>
     <details style="margin-top:12px">
-      <summary>Ajouter mes favoris</summary>
+      <summary>Ajouter mes favoris / réglages</summary>
       <p class="muted">Option 1 — <b>Connecter mon compte TikTok</b> (API Data Portability, Europe uniquement, l'export peut prendre quelques heures) :</p>
-      <div class="row"><a class="btn" id="connect" href="/auth/tiktok/login">Connecter TikTok</a>
+      <div class="row"><a class="btn" href="/auth/tiktok/login">Connecter TikTok</a>
         <button class="secondary" id="sync" type="button">Vérifier / importer l'export</button></div>
-      <p class="muted">Option 2 — <b>Importer l'export</b> : dans TikTok → Paramètres → Compte → Télécharger tes données → format <b>JSON</b>, puis dépose le fichier (.zip ou .json) ici :</p>
+      <p class="muted">Option 2 — <b>Importer l'export</b> : TikTok → Paramètres → Compte → Télécharger tes données → format <b>JSON</b>, puis dépose le fichier (.zip ou .json) :</p>
       <form id="upload" class="row">
         <input type="file" name="file" accept=".json,.zip" required>
         <label class="muted"><input type="checkbox" name="likes" value="true"> inclure les likes</label>
         <button>Importer</button>
       </form>
-      <p class="muted">Option 3 — <b>Coller des liens</b> de vidéos (un par ligne) :</p>
+      <p class="muted">Option 3 — <b>Coller des liens</b> de vidéos ou carrousels (un par ligne) :</p>
       <form id="links">
-        <textarea name="text" rows="3" placeholder="https://www.tiktok.com/@user/video/7300000000000000000"></textarea>
+        <textarea name="text" rows="3" placeholder="https://www.tiktok.com/@user/video/7300000000000000000&#10;https://www.tiktok.com/@user/photo/7300000000000000001"></textarea>
         <div class="row"><button>Ajouter</button>
-          <button class="secondary" type="button" id="retry">Relancer les vidéos en erreur</button></div>
+          <button class="secondary" type="button" id="retry">Relancer les erreurs</button>
+          <button class="secondary" type="button" id="reindex">Tout réindexer</button></div>
       </form>
-      <p class="muted" id="msg"></p>
+      <p class="muted small" id="msg"></p>
     </details>
   </div>
 
   <div id="results"></div>
 </main>
+
+<div class="selbar" id="selbar" hidden>
+  <b id="selcount"></b>
+  <select id="mode" title="Coût de l'analyse">
+    <option value="text">Texte seul (le moins cher)</option>
+    <option value="auto">Auto (captures si peu de texte)</option>
+    <option value="screens">Smart screens (texte + captures)</option>
+  </select>
+  <button id="analyzeSel">Analyser</button>
+  <button class="secondary" id="selAll">Tout sélectionner</button>
+  <button class="ghost" id="selClear">Effacer</button>
+</div>
+
+<dialog id="dlg">
+  <div class="dlg-head"><div id="dlgTitle"></div><div class="row" style="margin:0"><a class="btn secondary" id="dlgOpen" target="_blank" rel="noopener">Ouvrir sur TikTok ↗</a><button class="secondary" onclick="closeDlg()">✕</button></div></div>
+  <div class="dlg-body">
+    <div class="player" id="player"></div>
+    <div>
+      <div class="tabs" id="tabs"></div>
+      <div id="tabbody"></div>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="adlg">
+  <div class="dlg-head"><b id="adlgTitle">Analyse</b><div class="row" style="margin:0" id="adlgActions"></div></div>
+  <div style="padding:16px" id="adlgBody"></div>
+</dialog>
+
 <script>
 const $ = s => document.querySelector(s);
-const esc = s => (s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const hl = s => esc(s).replaceAll("\x02", "<mark>").replaceAll("\x03", "</mark>");
-let labels = {};
+const fmt = t => t == null ? "" : `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+const toast = m => { const d = Object.assign(document.createElement("div"), { className: "toast", textContent: m }); document.body.append(d); setTimeout(() => d.remove(), 2200); };
+let labels = {}, features = {}, lastResults = [], selected = new Set(), lastQuery = "";
 
+// ---------- statut ----------
 async function refresh() {
   const r = await fetch("/api/status").then(r => r.json());
-  labels = r.fields;
-  if (!$("#filters").childElementCount) {
-    $("#filters").innerHTML = '<span>Chercher dans :</span>' + Object.entries(labels).map(([k, v]) =>
-      `<label><input type="checkbox" name="field" value="${k}" checked> ${esc(v)}</label>`).join("")
-      + '<label><input type="checkbox" id="any"> au moins un des mots</label>';
+  labels = r.fields; features = r.features;
+  if (!$("#fieldboxes").childElementCount) {
+    $("#fieldboxes").innerHTML = '<span>Chercher dans : </span>' + Object.entries(labels).map(([k, v]) =>
+      `<label style="display:inline-flex;margin-right:10px"><input type="checkbox" name="field" value="${k}" checked> ${esc(v)}</label>`).join("");
   }
   const s = r.stats, j = r.job, f = r.features;
-  $("#stats").innerHTML = `<span><b>${s.total}</b> vidéos</span><span><b>${s.done}</b> indexées</span>
-    <span><b>${s.with_transcript}</b> avec transcription</span><span><b>${s.pending}</b> en attente</span>
-    <span><b>${s.error}</b> en erreur</span>
-    <span>Whisper : ${f.whisper ? "✅" : "—"} · OCR : ${f.ocr ? "✅" : "—"} · TikTok : ${f.tiktok_connected ? "connecté ✅" : (f.tiktok_oauth ? "non connecté" : "non configuré")}</span>`;
+  $("#stats").innerHTML = `<span><b>${s.total}</b> favoris (${s.videos} vidéos, ${s.carousels} carrousels)</span><span><b>${s.done}</b> indexés</span>
+    <span><b>${s.with_transcript}</b> transcrits</span><span><b>${s.analysed}</b> analysés</span><span><b>${s.pending}</b> en attente</span><span><b>${s.error}</b> erreurs</span>
+    <span>Whisper ${f.whisper ? "✅" : "—"} · OCR ${f.ocr ? "✅" : "—"} · IA ${f.llm !== "none" ? "✅ " + esc(f.llm_model) : "— (extraction locale seule)"} · TikTok ${f.tiktok_connected ? "connecté ✅" : (f.tiktok_oauth ? "non connecté" : "non configuré")}</span>`;
   $("#progressbar").hidden = !j.running;
   if (j.running) $("#progressbar div").style.width = (100 * j.done / Math.max(1, j.total)) + "%";
   setTimeout(refresh, j.running ? 2000 : 10000);
 }
 
+// ---------- recherche ----------
 async function doSearch(e) {
   e?.preventDefault();
-  const q = $("#q").value.trim();
-  if (!q) { $("#results").innerHTML = ""; return; }
-  const p = new URLSearchParams({ q });
-  const boxes = [...document.querySelectorAll('input[name=field]')];
-  if (boxes.some(b => !b.checked)) boxes.filter(b => b.checked).forEach(b => p.append("field", b.value));
-  if ($("#any")?.checked) p.set("any", "true");
-  history.replaceState(null, "", "?q=" + encodeURIComponent(q));
-  const r = await fetch("/api/search?" + p).then(r => r.json());
-  $("#results").innerHTML = `<p class="muted">${r.results.length} résultat(s)</p>` + r.results.map(v => `
-    <div class="card result">
-      <a class="thumb" href="${esc(v.url)}" target="_blank" rel="noopener" style="background-image:url('${esc(v.thumbnail)}')"></a>
-      <div>
-        <h3><a href="${esc(v.url)}" target="_blank" rel="noopener">@${esc(v.author || "inconnu")}</a>
-          <span class="muted" style="font-weight:400">${esc(v.favorited_at)}</span></h3>
-        ${v.matches.description ? "" : `<p class="desc">${esc((v.description || "").slice(0, 160))}</p>`}
-        ${Object.entries(v.matches).map(([k, s]) => `<p class="match"><span class="tag">${esc(labels[k] || k)}</span>${hl(s)}</p>`).join("")}
-      </div>
-    </div>`).join("");
+  const q = $("#q").value.trim(); lastQuery = q;
+  const p = new URLSearchParams();
+  let url;
+  if (q) {
+    p.set("q", q);
+    const boxes = [...document.querySelectorAll('input[name=field]')];
+    if (boxes.some(b => !b.checked)) boxes.filter(b => b.checked).forEach(b => p.append("field", b.value));
+    if ($("#any").checked) p.set("any", "true");
+    p.set("sort", $("#sort").value);
+    url = "/api/search?";
+  } else url = "/api/videos?";
+  if ($("#kind").value) p.set("kind", $("#kind").value);
+  history.replaceState(null, "", q ? "?q=" + encodeURIComponent(q) : location.pathname);
+  const r = await fetch(url + p).then(r => r.json());
+  lastResults = r.results;
+  renderResults(q);
 }
 
+function hitChip(v, h) {
+  const where = h.page ? `Page ${h.page}` : fmt(h.start);
+  const icon = h.page ? "🖼" : (h.kind === "ocr" ? "🔤" : "▶");
+  const pos = h.page ? `page:${h.page}` : `t:${h.start}`;
+  return `<button class="chip" data-open="${esc(v.id)}" data-pos="${pos}" data-tab="${h.kind}" title="${esc((h.text || "").replace(/[\x02\x03]/g, ""))}">
+    <b>${icon} ${where}</b><span class="t">${hl(h.text)}</span></button>`;
+}
+
+function renderResults(q) {
+  const res = lastResults;
+  if (!res.length) { $("#results").innerHTML = `<p class="empty">${q ? "Aucun résultat." : "Aucune vidéo indexée pour l'instant — ajoute tes favoris ci-dessus."}</p>`; return; }
+  $("#results").innerHTML = `<p class="muted">${q ? res.length + " résultat(s)" : "Derniers favoris"}</p>` + res.map(v => {
+    const badge = v.kind === "photo" ? `Carrousel · ${v.images.length} p.` : (v.duration ? fmt(v.duration) : "Vidéo");
+    const hits = v.hits || [];
+    const shown = hits.slice(0, 8);
+    return `<div class="card result ${selected.has(v.id) ? "selected" : ""}" data-id="${esc(v.id)}">
+      <input type="checkbox" class="select" data-sel="${esc(v.id)}" ${selected.has(v.id) ? "checked" : ""} title="Sélectionner pour l'analyse">
+      <button class="thumb" data-open="${esc(v.id)}" style="background-image:url('${esc(v.thumbnail)}')"><span class="play">${v.kind === "photo" ? "🖼" : "▶"}</span><span class="badge">${badge}</span></button>
+      <div class="body">
+        <h3><a data-open="${esc(v.id)}">@${esc(v.author || "inconnu")}</a> <span class="muted small" style="font-weight:400">${esc(v.favorited_at)}</span></h3>
+        ${v.matches.description ? "" : `<p class="desc">${esc((v.description || "").slice(0, 180))}</p>`}
+        ${Object.entries(v.matches).filter(([k]) => !(k === "transcript" && hits.some(h => h.kind === "transcript")) && !(k === "ocr_text" && hits.some(h => h.kind === "ocr")))
+          .map(([k, s]) => `<p class="match"><span class="tag">${esc(labels[k] || k)}</span>${hl(s)}</p>`).join("")}
+        ${shown.length ? `<div class="chips">${shown.map(h => hitChip(v, h)).join("")}${hits.length > shown.length ? `<button class="chip" data-open="${esc(v.id)}" data-tab="transcript">+${hits.length - shown.length} autres</button>` : ""}</div>` : ""}
+      </div></div>`;
+  }).join("");
+}
+
+$("#results").addEventListener("click", e => {
+  const sel = e.target.closest("[data-sel]");
+  if (sel) { toggleSel(sel.dataset.sel, sel.checked); return; }
+  const o = e.target.closest("[data-open]");
+  if (o) openVideo(o.dataset.open, o.dataset.pos, o.dataset.tab);
+});
+
+// ---------- sélection & analyse multiple ----------
+function toggleSel(id, on) {
+  on ? selected.add(id) : selected.delete(id);
+  document.querySelector(`.result[data-id="${CSS.escape(id)}"]`)?.classList.toggle("selected", on);
+  $("#selbar").hidden = !selected.size;
+  $("#selcount").textContent = `${selected.size} sélectionnée(s)`;
+}
+$("#selAll").onclick = () => lastResults.forEach(v => { toggleSel(v.id, true); const c = document.querySelector(`[data-sel="${CSS.escape(v.id)}"]`); if (c) c.checked = true; });
+$("#selClear").onclick = () => { [...selected].forEach(id => toggleSel(id, false)); document.querySelectorAll("[data-sel]").forEach(c => c.checked = false); };
+$("#analyzeSel").onclick = () => runAnalysis([...selected], $("#mode").value);
+
+async function runAnalysis(ids, mode, force = false, target = null) {
+  const btns = document.querySelectorAll("#analyzeSel, .an-run"); btns.forEach(b => b.disabled = true);
+  const box = target || $("#adlgBody");
+  if (!target) { $("#adlgTitle").textContent = `Analyse de ${ids.length} publication(s)`; $("#adlgActions").innerHTML = closeBtn("adlg"); $("#adlg").showModal(); }
+  box.innerHTML = `<p class="muted">Analyse en cours… (${ids.length} publication(s), mode ${esc(mode)}${mode === "screens" ? " — téléchargement et sélection des captures" : ""})</p>`;
+  try {
+    const r = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids, mode, force }) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "Erreur");
+    box.innerHTML = renderAnalysis(data, ids.length === 1);
+    if (!target) {
+      const q = `ids=${ids.join(",")}&mode=${mode}`;
+      $("#adlgActions").innerHTML = `<a class="btn secondary" href="/api/analyze/export?${q}&format=md">Markdown</a><a class="btn secondary" href="/api/analyze/export?${q}&format=csv">CSV</a><a class="btn secondary" href="/api/analyze/export?${q}&format=json" target="_blank">JSON</a>` + closeBtn("adlg");
+    }
+    refresh();
+  } catch (err) { box.innerHTML = `<p style="color:var(--accent)">${esc(err.message)}</p>`; }
+  btns.forEach(b => b.disabled = false);
+}
+const closeBtn = id => `<button class="secondary" onclick="document.getElementById('${id}').close()">✕</button>`;
+
+const CAT = { tools: "🛠 Outils & applis", websites: "🌐 Sites web", products: "📦 Produits, livres, formations", people: "👤 Comptes & marques", promo_codes: "🏷 Codes promo", domains: "🔗 Domaines détectés (local)" };
+
+function whereChip(id, where, author, single) {
+  if (!where && single) return "";
+  const m = /page\s*(\d+)/i.exec(where || ""), t = /(\d+):(\d{2})/.exec(where || "");
+  const pos = m ? `page:${m[1]}` : t ? `t:${+t[1] * 60 + +t[2]}` : "";
+  const label = single ? where : `@${author || "?"}${where ? " · " + where : ""}`;
+  return `<button class="chip" data-open="${esc(id)}" data-pos="${pos}"><b>${m ? "🖼" : "▶"}</b>${esc(label)}</button>`;
+}
+
+function renderAnalysis(data, single) {
+  const agg = data.aggregate, results = data.results;
+  let html = "";
+  const errors = results.filter(r => r.error);
+  if (errors.length) html += `<p style="color:var(--accent)">⚠️ IA indisponible pour ${errors.length} publication(s) : ${esc(errors[0].error)} — seule l'extraction locale est affichée.</p>`;
+  if (results.every(r => r.provider === "none")) html += `<p class="muted small">Aucune IA configurée : extraction locale gratuite seulement. Ajoute une clé <code>GEMINI_API_KEY</code> (gratuite) ou utilise Ollama pour une analyse complète.</p>`;
+  for (const v of agg.videos) {
+    html += `<div class="an-sec"><h2>${single ? "" : `<a data-open="${esc(v.video_id)}" style="cursor:pointer">@${esc(v.author)}</a> — `}${esc(v.topic)}</h2><p>${esc(v.summary)}</p>
+      ${v.key_points.length ? `<ul>${v.key_points.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
+      ${v.steps.length ? `<p class="muted">Étapes</p><ol>${v.steps.map(p => `<li>${esc(p)}</li>`).join("")}</ol>` : ""}</div>`;
+  }
+  for (const [cat, label] of Object.entries(CAT)) {
+    const items = agg[cat] || [];
+    if (!items.length) continue;
+    html += `<div class="an-sec"><h2>${label} <span class="muted small">(${items.length})</span></h2>` + items.map(it => `
+      <div class="an-item"><b>${it.url ? `<a href="${esc(/^https?:/.test(it.url) ? it.url : "https://" + it.url)}" target="_blank" rel="noopener">${esc(it.name)}</a>` : esc(it.name)}</b>
+        ${it.category ? `<span class="tag">${esc(it.category)}</span>` : ""}${!single && it.sources.length > 1 ? `<span class="tag">${it.sources.length} vidéos</span>` : ""}
+        ${it.details ? `<div class="muted small">${esc(it.details)}</div>` : ""}
+        <div class="chips">${it.sources.map(s => whereChip(s.video_id, s.where, s.author, single)).join("")}</div></div>`).join("") + "</div>";
+  }
+  // extractions locales complémentaires (liens, @comptes, codes, prix)
+  const loc = { links: "Liens", mentions: "@ comptes cités", promo_codes: "Codes repérés", prices: "Prix", emails: "E-mails" };
+  for (const [k, label] of Object.entries(loc)) {
+    const rows = results.flatMap(r => (r.local[k] || []).map(x => ({ ...x, id: r.video_id })));
+    if (!rows.length) continue;
+    html += `<div class="an-sec"><h2>${label} <span class="muted small">(local)</span></h2><div class="chips">` + rows.map(x =>
+      k === "links" ? `<a class="chip" href="${esc(x.value)}" target="_blank" rel="noopener">${esc(x.value)}</a>` :
+      `<button class="chip" data-open="${esc(x.id)}" data-pos="${x.where[0] && /page/.test(x.where[0]) ? "page:" + x.where[0].replace(/\D/g, "") : (/(\d+):(\d+)/.test(x.where[0] || "") ? "t:" + x.where[0].split(":").reduce((a, b) => a * 60 + +b, 0) : "")}"><b>${esc(x.value)}</b>${x.where.length ? `<span class="muted">${esc(x.where.join(", "))}</span>` : ""}</button>`).join("") + "</div></div>";
+  }
+  const shots = results.flatMap(r => r.screens.map(s => ({ ...s, id: r.video_id })));
+  if (shots.length) html += `<div class="an-sec"><h2>📸 Captures analysées</h2><div class="screens">${shots.map(s => {
+    const pos = /page/.test(s.label) ? "page:" + s.label.replace(/\D/g, "") : "t:" + s.label.split(":").reduce((a, b) => a * 60 + +b, 0);
+    return `<figure data-open="${esc(s.id)}" data-pos="${pos}"><img src="${esc(s.url)}" loading="lazy"><figcaption>${esc(s.label)}</figcaption></figure>`; }).join("")}</div></div>`;
+  const usage = results.reduce((a, r) => ({ i: a.i + (r.usage?.input_tokens || 0), o: a.o + (r.usage?.output_tokens || 0), c: a.c + (r.cached ? 1 : 0) }), { i: 0, o: 0, c: 0 });
+  html += `<p class="muted small">${results[0]?.provider !== "none" ? `Modèle : ${esc(results[0]?.model)} · ` : ""}${usage.c}/${results.length} depuis le cache (gratuit) · tokens : ${usage.i} entrée / ${usage.o} sortie</p>`;
+  if (!html.includes("an-sec")) html += `<p class="empty">Rien d'exploitable trouvé.</p>`;
+  return html;
+}
+
+$("#adlgBody").addEventListener("click", e => { const o = e.target.closest("[data-open]"); if (o) { $("#adlg").close(); openVideo(o.dataset.open, o.dataset.pos); } });
+
+// ---------- fenêtre vidéo / carrousel ----------
+let cur = null; // {video, segments, analysis, page, pendingSeek, tab}
+
+async function openVideo(id, pos, tab) {
+  const q = lastQuery;
+  const data = await fetch(`/api/video/${encodeURIComponent(id)}?q=${encodeURIComponent(q)}`).then(r => r.json());
+  cur = { ...data, page: 1, pendingSeek: null, ready: false, filter: q };
+  const v = data.video;
+  $("#dlgTitle").innerHTML = `<b>@${esc(v.author || "inconnu")}</b> <span class="muted small">${v.kind === "photo" ? `Carrousel · ${v.images.length} pages` : (v.duration ? fmt(v.duration) : "")}</span>`;
+  $("#dlgOpen").href = v.url;
+  renderPlayer();
+  const tabs = [["transcript", "Transcription"], ["ocr", v.kind === "photo" ? "Texte des pages" : "Texte à l'écran"], ["analysis", "Analyse IA"], ["info", "Infos"]];
+  $("#tabs").innerHTML = tabs.map(([k, l]) => `<button data-tab="${k}">${l}</button>`).join("");
+  const firstHit = data.segments.find(s => s.match && s.kind === "transcript") || data.segments.find(s => s.match);
+  showTab(tab || (firstHit ? firstHit.kind : (v.kind === "photo" ? "ocr" : "transcript")));
+  if (!$("#dlg").open) $("#dlg").showModal();
+  if (pos) goTo(pos);
+}
+
+function closeDlg() { $("#dlg").close(); }
+$("#dlg").addEventListener("close", () => { $("#player").innerHTML = ""; cur = null; });
+
+function renderPlayer() {
+  const v = cur.video;
+  if (v.kind === "photo") {
+    const n = v.images.length;
+    $("#player").innerHTML = n ? `<div class="carousel"><a id="imglink" target="_blank"><img id="pageimg" alt=""></a>
+      <button class="nav prev" onclick="goTo('page:'+(cur.page-1))">‹</button><button class="nav next" onclick="goTo('page:'+(cur.page+1))">›</button></div>
+      <div class="pages">${v.images.map((_, i) => `<button data-page="${i + 1}" onclick="goTo('page:${i + 1}')">${i + 1}</button>`).join("")}</div>`
+      : `<p class="muted">Images non disponibles.</p>`;
+    if (n) goTo("page:1");
+  } else if (v.media_path) {
+    $("#player").innerHTML = `<video id="vid" src="${esc(v.media_path)}" controls autoplay playsinline poster="${esc(v.thumbnail)}"></video>`;
+    $("#vid").addEventListener("timeupdate", syncActive);
+  } else {
+    // Lecteur officiel TikTok : on lui envoie seekTo via postMessage.
+    $("#player").innerHTML = `<iframe id="ttplayer" allow="autoplay; fullscreen; encrypted-media" src="https://www.tiktok.com/player/v1/${encodeURIComponent(v.id)}?autoplay=1&music_info=0&description=0&rel=0&native_context_menu=0"></iframe>
+      <p class="muted small">Astuce : active <code>TTS_KEEP_VIDEO=on</code> pour une lecture locale avec saut aux timecodes 100 % fiable.</p>`;
+  }
+}
+
+window.addEventListener("message", e => {
+  if (!cur || !e.data) return;
+  let d = e.data; try { if (typeof d === "string") d = JSON.parse(d); } catch { return; }
+  if (d["x-tiktok-player"] || d.type === "onPlayerReady") {
+    if (d.type === "onPlayerReady") { cur.ready = true; if (cur.pendingSeek != null) { ttSeek(cur.pendingSeek); cur.pendingSeek = null; } }
+    if (d.type === "onCurrentTime" && d.value) { cur.time = d.value.currentTime; syncActive(); }
+  }
+});
+function ttSeek(t) {
+  const f = $("#ttplayer"); if (!f) return;
+  f.contentWindow.postMessage({ "x-tiktok-player": true, type: "seekTo", value: Math.max(0, t) }, "*");
+  f.contentWindow.postMessage({ "x-tiktok-player": true, type: "play" }, "*");
+}
+
+function goTo(pos) {
+  if (!cur || !pos) return;
+  const [k, val] = pos.split(":");
+  if (k === "page") {
+    const n = cur.video.images.length; if (!n) return;
+    cur.page = Math.min(n, Math.max(1, +val));
+    $("#pageimg").src = cur.video.images[cur.page - 1];
+    $("#imglink").href = cur.video.images[cur.page - 1];
+    document.querySelectorAll(".pages button").forEach(b => b.classList.toggle("on", +b.dataset.page === cur.page));
+    syncActive();
+  } else {
+    const t = Math.max(0, +val - 0.5);
+    const vid = $("#vid");
+    if (vid) { vid.currentTime = t; vid.play().catch(() => {}); }
+    else if (cur.ready) ttSeek(t);
+    else { cur.pendingSeek = t; setTimeout(() => { if (cur && cur.pendingSeek != null) { ttSeek(cur.pendingSeek); } }, 2500); }
+  }
+}
+
+function syncActive() {
+  if (!cur) return;
+  const t = $("#vid") ? $("#vid").currentTime : cur.time;
+  document.querySelectorAll(".seg").forEach(el => {
+    const on = cur.video.kind === "photo" ? +el.dataset.page === cur.page
+      : (t != null && +el.dataset.start <= t + 0.3 && t < +el.dataset.end);
+    el.classList.toggle("active", !!on);
+  });
+}
+
+function showTab(tab) {
+  cur.tab = tab;
+  document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
+  const v = cur.video;
+  if (tab === "transcript" || tab === "ocr") {
+    const segs = cur.segments.filter(s => s.kind === tab);
+    const n = segs.filter(s => s.match).length;
+    $("#tabbody").innerHTML = `<div class="row" style="margin:0 0 10px"><input type="text" id="segfilter" placeholder="Surligner des mots…" value="${esc(cur.filter)}" style="flex:1;min-width:0">
+      <button class="secondary" id="copyseg">Copier</button></div>
+      ${cur.filter ? `<p class="muted small">${n} passage(s) correspondant(s)${n ? ` — <a href="#" id="nexthit">aller au suivant</a>` : ""}</p>` : ""}
+      <div class="seglist">${segs.length ? segs.map(s => `<div class="seg ${s.match ? "hit" : ""}" data-start="${s.start ?? ""}" data-end="${s.end ?? ""}" data-page="${s.page ?? ""}" data-pos="${s.page ? "page:" + s.page : "t:" + s.start}">
+        <span class="tc">${s.page ? "Page " + s.page : fmt(s.start)}</span><span class="tx">${hl(s.text)}</span></div>`).join("")
+        : `<p class="empty">${tab === "transcript" ? (v.kind === "photo" ? "Un carrousel n'a pas de transcription." : "Pas de transcription (pas de sous-titres TikTok, et Whisper n'est pas installé).") : "Pas de texte détecté (OCR désactivé ou rien d'écrit)."}</p>`}</div>`;
+    $("#segfilter").onchange = async e => { cur.filter = e.target.value; const d = await fetch(`/api/video/${encodeURIComponent(v.id)}?q=${encodeURIComponent(cur.filter)}`).then(r => r.json()); cur.segments = d.segments; showTab(tab); };
+    $("#copyseg").onclick = () => { navigator.clipboard.writeText(segs.map(s => `[${s.page ? "p." + s.page : fmt(s.start)}] ${s.text.replace(/[\x02\x03]/g, "")}`).join("\n")); toast("Copié"); };
+    let hitIdx = -1;
+    $("#nexthit")?.addEventListener("click", e => { e.preventDefault(); const hits = [...document.querySelectorAll(".seg.hit")]; if (!hits.length) return; hitIdx = (hitIdx + 1) % hits.length; hits[hitIdx].scrollIntoView({ block: "center" }); goTo(hits[hitIdx].dataset.pos); });
+    document.querySelectorAll(".seg").forEach(el => el.onclick = () => goTo(el.dataset.pos));
+    document.querySelector(".seg.hit")?.scrollIntoView({ block: "center" });
+    syncActive();
+  } else if (tab === "analysis") {
+    $("#tabbody").innerHTML = `<div class="row" style="margin:0 0 12px">
+        <button class="an-run" data-mode="text">Analyser (texte, le moins cher)</button>
+        <button class="an-run secondary" data-mode="screens">Analyser avec smart screens</button>
+      </div><div id="anbox">${cur.analysis ? "" : `<p class="muted">Pas encore analysée. L'extraction des liens, @comptes et codes promo est gratuite ; l'IA ${features.llm !== "none" ? `(${esc(features.llm_model)})` : "n'est pas configurée"} complète avec les outils, sites, produits, étapes…</p>`}</div>`;
+    document.querySelectorAll(".an-run").forEach(b => b.onclick = () => runAnalysis([v.id], b.dataset.mode, false, $("#anbox")));
+    if (cur.analysis) runAnalysis([v.id], cur.analysis.mode, false, $("#anbox"));
+  } else {
+    $("#tabbody").innerHTML = `<p style="white-space:pre-wrap">${esc(v.description) || '<span class="muted">Pas de légende.</span>'}</p>
+      <p class="muted">${esc(v.hashtags)}</p>
+      ${v.entities ? `<p><span class="tag">outils & sites</span>${esc(v.entities)}</p>` : ""}
+      <p class="muted small">Ajoutée aux favoris : ${esc(v.favorited_at || "?")} · ID ${esc(v.id)}</p>
+      <div class="row"><a class="btn" href="${esc(v.url)}" target="_blank" rel="noopener">Ouvrir sur TikTok ↗</a>
+      <button class="secondary" onclick="navigator.clipboard.writeText('${esc(v.url)}');toast('Lien copié')">Copier le lien</button></div>`;
+  }
+}
+$("#tabs").addEventListener("click", e => { const b = e.target.closest("[data-tab]"); if (b) showTab(b.dataset.tab); });
+$("#tabbody").addEventListener("click", e => { const o = e.target.closest("[data-open]"); if (o && cur) { if (o.dataset.open === cur.video.id) goTo(o.dataset.pos); else openVideo(o.dataset.open, o.dataset.pos); } });
+document.addEventListener("keydown", e => {
+  if (e.key === "/" && document.activeElement.tagName !== "INPUT" && document.activeElement.tagName !== "TEXTAREA") { e.preventDefault(); $("#q").focus(); }
+  if (cur && cur.video.kind === "photo" && $("#dlg").open && document.activeElement.tagName !== "INPUT") {
+    if (e.key === "ArrowRight") goTo("page:" + (cur.page + 1));
+    if (e.key === "ArrowLeft") goTo("page:" + (cur.page - 1));
+  }
+});
+
+// ---------- imports ----------
 async function post(url, body) {
   const r = await fetch(url, { method: "POST", body });
   const j = await r.json();
-  $("#msg").textContent = r.ok ? (j.found !== undefined ? `${j.found} vidéo(s) trouvée(s), ${j.added} nouvelle(s). Indexation en cours…` : JSON.stringify(j)) : (j.detail || "Erreur");
+  $("#msg").textContent = r.ok ? (j.found !== undefined ? `${j.found} publication(s) trouvée(s), ${j.added} nouvelle(s). Indexation en cours…` : JSON.stringify(j)) : (j.detail || "Erreur");
   refresh();
 }
-
 $("#search").onsubmit = doSearch;
-$("#filters").onchange = () => $("#q").value && doSearch();
+$("#filters").onchange = () => doSearch();
 $("#upload").onsubmit = e => { e.preventDefault(); post("/api/import", new FormData(e.target)); };
 $("#links").onsubmit = e => { e.preventDefault(); post("/api/links", new FormData(e.target)); };
 $("#retry").onclick = () => post("/api/process?retry_errors=true");
+$("#reindex").onclick = () => confirm("Tout réindexer ? (re-télécharge les infos de chaque favori)") && post("/api/reindex");
 $("#sync").onclick = () => post("/api/tiktok/sync");
 const initial = new URLSearchParams(location.search).get("q");
-refresh().then(() => { if (initial) { $("#q").value = initial; doSearch(); } });
+refresh().then(() => { if (initial) $("#q").value = initial; doSearch(); });
 </script>
 </body>
 </html>

@@ -1,4 +1,10 @@
-"""Récupération des métadonnées, sous-titres, audio et images d'une vidéo TikTok via yt-dlp."""
+"""Récupération des métadonnées, sous-titres et médias d'une vidéo/carrousel TikTok.
+
+Ordre des sources, de la plus complète à la plus légère :
+1. page TikTok (``tiktok_page``) — gère vidéos ET carrousels, sous-titres horodatés
+2. yt-dlp — repli pour les vidéos si la page n'est pas lisible
+3. oEmbed public — dernier repli (légende + auteur seulement)
+"""
 
 from __future__ import annotations
 
@@ -10,20 +16,84 @@ from pathlib import Path
 import httpx
 
 from .importer import canonical_url
+from .tiktok_page import PageItem
 
 HASHTAG_RE = re.compile(r"#([\wÀ-ɏ]+)", re.UNICODE)
+_TS_RE = re.compile(r"(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})")
 
 
 @dataclass
 class VideoMeta:
     video_id: str
+    kind: str = "video"
     author: str = ""
     description: str = ""
     hashtags: list[str] = field(default_factory=list)
     thumbnail: str = ""
     duration: float | None = None
-    subtitles_text: str = ""
+    image_urls: list[str] = field(default_factory=list)
+    subtitle_segments: list[dict] = field(default_factory=list)  # [{start, end, text}]
 
+    @classmethod
+    def from_page(cls, p: PageItem) -> "VideoMeta":
+        return cls(p.video_id, p.kind, p.author, p.description, p.hashtags, p.cover, p.duration, p.image_urls)
+
+
+# --- sous-titres --------------------------------------------------------------
+
+def _ts(s: str) -> float:
+    m = _TS_RE.search(s)
+    if not m:
+        return 0.0
+    h, mi, se, ms = m.groups()
+    return int(h or 0) * 3600 + int(mi) * 60 + int(se) + int(ms.ljust(3, "0")) / 1000
+
+
+def parse_vtt_segments(text: str) -> list[dict]:
+    """WebVTT/SRT → [{start, end, text}], sans balises ni doublons consécutifs."""
+    segments: list[dict] = []
+    current: dict | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if "-->" in line:
+            a, _, b = line.partition("-->")
+            current = {"start": _ts(a), "end": _ts(b), "text": ""}
+            segments.append(current)
+            continue
+        if (not line or line == "WEBVTT" or line.isdigit()
+                or line.startswith(("NOTE", "Kind:", "Language:", "STYLE")) or current is None):
+            continue
+        line = re.sub(r"<[^>]+>", "", line).strip()
+        if line:
+            current["text"] = f"{current['text']} {line}".strip()
+    out: list[dict] = []
+    for s in segments:
+        if not s["text"]:
+            continue
+        if out and out[-1]["text"] == s["text"]:
+            out[-1]["end"] = s["end"]
+        else:
+            out.append(s)
+    return out
+
+
+def parse_vtt(text: str) -> str:
+    return " ".join(s["text"] for s in parse_vtt_segments(text))
+
+
+def pick_subtitle(subs: list[dict], preferred: tuple[str, ...] = ("fr", "en")) -> dict | None:
+    if not subs:
+        return None
+
+    def rank(s: dict) -> tuple[int, int]:
+        lang = (s.get("lang") or "").lower()
+        pref = next((i for i, p in enumerate(preferred) if lang.startswith(p)), len(preferred))
+        return pref, 0 if (s.get("format") or "").lower() in ("webvtt", "vtt", "") else 1
+
+    return sorted(subs, key=rank)[0]
+
+
+# --- yt-dlp / oEmbed ----------------------------------------------------------
 
 def _ydl(opts: dict | None = None):
     import yt_dlp  # import tardif : lourd à charger
@@ -33,55 +103,22 @@ def _ydl(opts: dict | None = None):
     return yt_dlp.YoutubeDL(base)
 
 
-def parse_vtt(text: str) -> str:
-    """Convertit un WebVTT/SRT en texte brut, sans horodatages ni doublons consécutifs."""
-    lines: list[str] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if (
-            not line
-            or line == "WEBVTT"
-            or "-->" in line
-            or line.isdigit()
-            or line.startswith(("NOTE", "Kind:", "Language:", "STYLE"))
-        ):
-            continue
-        line = re.sub(r"<[^>]+>", "", line).strip()
-        if line and (not lines or lines[-1] != line):
-            lines.append(line)
-    return " ".join(lines)
-
-
-def _pick_subtitles(info: dict, preferred: tuple[str, ...] = ("fr", "en")) -> str:
-    tracks = {**(info.get("automatic_captions") or {}), **(info.get("subtitles") or {})}
-    if not tracks:
-        return ""
-    langs = sorted(
-        tracks,
-        key=lambda lang: next((i for i, p in enumerate(preferred) if lang.lower().startswith(p)), len(preferred)),
-    )
-    for lang in langs:
-        for fmt in tracks[lang]:
-            url = fmt.get("url")
-            if not url or fmt.get("ext") not in (None, "vtt", "srt", "webvtt"):
-                continue
-            try:
-                r = httpx.get(url, timeout=30, follow_redirects=True)
-                r.raise_for_status()
-                text = parse_vtt(r.text)
-                if text:
-                    return text
-            except httpx.HTTPError:
-                continue
-    return ""
-
-
-def fetch_metadata(video_id: str) -> VideoMeta:
+def fetch_metadata_ytdlp(video_id: str) -> VideoMeta:
     with _ydl({"skip_download": True}) as ydl:
         info = ydl.extract_info(canonical_url(video_id), download=False)
     description = info.get("description") or info.get("title") or ""
     tags = set(HASHTAG_RE.findall(description))
     tags.update(t.lstrip("#") for t in (info.get("tags") or []) if t)
+    segments: list[dict] = []
+    tracks = {**(info.get("automatic_captions") or {}), **(info.get("subtitles") or {})}
+    subs = [{"lang": lang, "url": f.get("url"), "format": f.get("ext", "")}
+            for lang, fmts in tracks.items() for f in fmts if f.get("url")]
+    best = pick_subtitle(subs)
+    if best:
+        try:
+            segments = parse_vtt_segments(httpx.get(best["url"], timeout=30, follow_redirects=True).text)
+        except httpx.HTTPError:
+            pass
     return VideoMeta(
         video_id=video_id,
         author=info.get("uploader") or info.get("creator") or info.get("channel") or "",
@@ -89,17 +126,14 @@ def fetch_metadata(video_id: str) -> VideoMeta:
         hashtags=sorted(tags, key=str.lower),
         thumbnail=info.get("thumbnail") or "",
         duration=info.get("duration"),
-        subtitles_text=_pick_subtitles(info),
+        subtitle_segments=segments,
     )
 
 
 def fetch_oembed(video_id: str) -> VideoMeta:
-    """Repli léger (sans yt-dlp) : l'oEmbed public de TikTok donne légende + auteur."""
-    r = httpx.get(
-        "https://www.tiktok.com/oembed",
-        params={"url": f"https://www.tiktok.com/@/video/{video_id}"},
-        timeout=20,
-    )
+    """Repli léger : l'oEmbed public de TikTok donne légende + auteur + miniature."""
+    r = httpx.get("https://www.tiktok.com/oembed",
+                  params={"url": f"https://www.tiktok.com/@/video/{video_id}"}, timeout=20)
     r.raise_for_status()
     data = r.json()
     description = data.get("title", "")
@@ -112,10 +146,13 @@ def fetch_oembed(video_id: str) -> VideoMeta:
     )
 
 
+# --- médias -------------------------------------------------------------------
+
 def download_video(video_id: str, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     template = str(out_dir / f"{video_id}.%(ext)s")
-    with _ydl({"outtmpl": template, "format": "worst[ext=mp4]/worst/best"}) as ydl:
+    # Qualité modeste : suffisante pour Whisper/OCR et bien plus légère.
+    with _ydl({"outtmpl": template, "format": "best[height<=720][ext=mp4]/best[ext=mp4]/best"}) as ydl:
         info = ydl.extract_info(canonical_url(video_id), download=True)
         return Path(ydl.prepare_filename(info))
 
@@ -128,17 +165,3 @@ def extract_audio(video_path: Path) -> Path:
         check=True,
     )
     return audio
-
-
-def extract_frames(video_path: Path, every_seconds: float = 2.0, max_frames: int = 30) -> list[Path]:
-    frames_dir = video_path.parent / f"{video_path.stem}_frames"
-    frames_dir.mkdir(exist_ok=True)
-    subprocess.run(
-        [
-            "ffmpeg", "-y", "-loglevel", "error", "-i", str(video_path),
-            "-vf", f"fps=1/{every_seconds},scale=720:-2", "-frames:v", str(max_frames),
-            str(frames_dir / "f_%03d.png"),
-        ],
-        check=True,
-    )
-    return sorted(frames_dir.glob("f_*.png"))
