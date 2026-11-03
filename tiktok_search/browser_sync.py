@@ -16,6 +16,7 @@ après une première synchro complète on s'arrête dès qu'une page ne contient
 from __future__ import annotations
 
 import logging
+import re
 import os
 import shutil
 import sys
@@ -32,18 +33,16 @@ log = logging.getLogger(__name__)
 TIKTOK = "https://www.tiktok.com"
 FAVORITES_API = "/api/user/collect/item_list"
 SESSION_COOKIES = ("sessionid", "sessionid_ss")
-FAVORITES_TAB_SELECTORS = (
-    '[data-e2e="favorites-tab"]',
-    '[role="tab"]:has-text("Favoris")',
-    '[role="tab"]:has-text("Favorites")',
-    'p:text-is("Favoris")',
-    'p:text-is("Favorites")',
-)
+FAVORITES_TAB_SELECTORS = ('[data-e2e="favorites-tab"]', '[data-e2e="favorite-tab"]', '[data-e2e="collect-tab"]')
+# Nom de l'onglet selon la langue de TikTok.
+FAVORITES_TAB_TEXT = re.compile(r"^\s*(favoris|favorites?|favoritos|favoriten|preferiti|ulubione|favorieten)\s*$", re.I)
+OWN_PROFILE_SELECTORS = ('[data-e2e="edit-profile-entrance"]', '[data-e2e="edit-profile"]')
 CAPTCHA_SELECTORS = ("#captcha-verify-container", ".captcha_verify_container", "#captcha_container",
                      '[class*="captcha-verify"]')
 KV_USERNAME = "browser_username"
 KV_LAST_SYNC = "browser_last_sync"
 KV_FULL_DONE = "browser_full_sync_done"
+KV_SESSION = "browser_session"
 
 _lock = threading.Lock()  # un seul navigateur à la fois sur le profil
 
@@ -154,55 +153,94 @@ def _logged_in(ctx, base: str) -> bool:
     return any(c["name"] in SESSION_COOKIES and c.get("value") for c in ctx.cookies(base))
 
 
-def _detect_username(page, base: str) -> str:
+def _username_candidates(page) -> list[str]:
+    """Ton @ vu par TikTok. Le lien « Profil » du menu donne le @ public actuel ; l'API de compte
+    peut renvoyer un ancien identifiant de connexion (comptes créés avec Google, par ex.)."""
+    names = []
+    try:
+        page.wait_for_selector('a[data-e2e="nav-profile"]', timeout=8000)
+        href = page.locator('a[data-e2e="nav-profile"]').first.get_attribute("href") or ""
+        if "/@" in href:
+            names.append(href.split("/@", 1)[1].split("?")[0].strip("/"))
+    except Exception as e:  # noqa: BLE001
+        log.debug("lien de profil introuvable : %s", e)
     try:
         info = page.evaluate(
             "async () => { const r = await fetch('/passport/web/account/info/', {credentials: 'include'});"
             " return r.ok ? await r.json() : null; }")
         name = ((info or {}).get("data") or {}).get("username")
         if name:
-            return str(name)
+            names.append(str(name))
     except Exception as e:  # noqa: BLE001
         log.debug("account/info indisponible : %s", e)
-    try:
-        href = page.locator('a[data-e2e="nav-profile"]').first.get_attribute("href", timeout=5000) or ""
-        if "/@" in href:
-            return href.split("/@", 1)[1].split("?")[0].strip("/")
-    except Exception as e:  # noqa: BLE001
-        log.debug("lien de profil introuvable : %s", e)
-    return ""
+    return names
 
 
 def _has_captcha(page) -> bool:
     return any(page.locator(sel).first.is_visible() for sel in CAPTCHA_SELECTORS if page.locator(sel).count())
 
 
-def _open_favorites_tab(page) -> None:
-    for sel in FAVORITES_TAB_SELECTORS:
-        loc = page.locator(sel).first
-        try:
-            if loc.count() and loc.is_visible():
-                loc.click()
-                return
-        except Exception:  # noqa: BLE001
-            continue
-    raise SyncError("Onglet « Favoris » introuvable sur ton profil.")
+def _find_favorites_tab(page, timeout: float = 20):
+    """Attend que la page du profil affiche ses onglets, puis renvoie l'onglet « Favoris »."""
+    deadline = time.monotonic() + timeout
+    while True:
+        candidates = [page.locator(sel).first for sel in FAVORITES_TAB_SELECTORS]
+        candidates += [page.get_by_role("tab", name=FAVORITES_TAB_TEXT).first,
+                       page.get_by_text(FAVORITES_TAB_TEXT).first]
+        for loc in candidates:
+            try:
+                if loc.count() and loc.is_visible():
+                    return loc
+            except Exception:  # noqa: BLE001
+                continue
+        if time.monotonic() > deadline:
+            return None
+        page.wait_for_timeout(1000)
 
 
-def _collect(page, base: str, username: str, known: set[str], stop_on_known: bool,
-             progress: Callable[[str], None], max_minutes: float, interactive: bool) -> SyncResult:
+def _visible_tabs(page) -> str:
+    try:
+        texts = page.locator('[role="tab"], [data-e2e$="-tab"]').all_inner_texts()
+    except Exception:  # noqa: BLE001
+        return ""
+    return ", ".join(dict.fromkeys(t.strip() for t in texts if t.strip()))[:200]
+
+
+def _open_profile_favorites(page, base: str, names: list[str], wait_captcha: Callable[[], None]) -> str:
+    """Va sur ton profil (essaie chaque @ possible) et clique sur « Favoris ». Renvoie le @ retenu."""
+    tried = []
+    for name in dict.fromkeys(n.lstrip("@") for n in names if n):
+        page.goto(f"{base}/@{name}", wait_until="domcontentloaded")
+        wait_captcha()
+        tab = _find_favorites_tab(page)
+        if tab is not None:
+            tab.click()
+            return name
+        tried.append(f"{page.url} (onglets vus : {_visible_tabs(page) or 'aucun'})")
+    if not tried:
+        raise SyncError("Impossible de trouver ton @ TikTok : renseigne TTS_TIKTOK_USERNAME dans .env.")
+    raise SyncError("Onglet « Favoris » introuvable sur " + " ; ".join(tried)
+                    + ". Si ce n'est pas ton profil, renseigne TTS_TIKTOK_USERNAME dans .env.")
+
+
+def _collect(page, base: str, names: list[str], known: set[str], stop_on_known: bool,
+             progress: Callable[[str], None], max_minutes: float, interactive: bool,
+             on_username: Callable[[str], None]) -> SyncResult:
     responses: list = []
     page.on("response", lambda r: responses.append(r) if FAVORITES_API in r.url else None)
-    page.goto(f"{base}/@{username}", wait_until="domcontentloaded")
-    page.wait_for_timeout(2500)
-    if _has_captcha(page):
+
+    def wait_captcha() -> None:
+        page.wait_for_timeout(1500)
+        if not _has_captcha(page):
+            return
         if not interactive:
             raise Blocked("TikTok demande une vérification (captcha).")
         progress("TikTok demande une vérification : résous-la dans la fenêtre.")
         page.wait_for_function(
             "sels => !sels.some(s => document.querySelector(s))", arg=list(CAPTCHA_SELECTORS), timeout=180_000)
-    _open_favorites_tab(page)
 
+    username = _open_profile_favorites(page, base, names, wait_captcha)
+    on_username(username)
     result = SyncResult(username)
     seen: set[str] = set()
     deadline = time.monotonic() + max_minutes * 60
@@ -246,7 +284,8 @@ def _debug_shot(page, debug_dir: Path | None) -> None:
     if debug_dir and page and not page.is_closed():
         try:
             debug_dir.mkdir(parents=True, exist_ok=True)
-            page.screenshot(path=str(debug_dir / "sync-debug.png"))
+            page.screenshot(path=str(debug_dir / "sync-debug.png"), full_page=True)
+            (debug_dir / "sync-debug.html").write_text(page.content(), encoding="utf-8")
         except Exception:  # noqa: BLE001
             pass
 
@@ -254,7 +293,8 @@ def _debug_shot(page, debug_dir: Path | None) -> None:
 def run(*, profile: Path, known: set[str], stop_on_known: bool, username: str = "", login: bool = False,
         headless: bool = True, channel: str = "auto", base: str = TIKTOK, login_timeout: float = 300,
         max_minutes: float = 20, progress: Callable[[str], None] = lambda m: None,
-        debug_dir: Path | None = None) -> SyncResult:
+        debug_dir: Path | None = None, on_username: Callable[[str], None] = lambda n: None,
+        on_session: Callable[[bool], None] = lambda ok: None) -> SyncResult:
     """Ouvre le navigateur, (connexion si ``login``), puis lit les favoris."""
     if not is_available():
         raise SyncError("Playwright n'est pas installé : pip install playwright")
@@ -280,16 +320,16 @@ def run(*, profile: Path, known: set[str], stop_on_known: bool, username: str = 
                     progress("Connecté, lecture des favoris…")
                     page.wait_for_timeout(2000)
                 elif not _logged_in(ctx, base):
+                    on_session(False)
                     raise NotLoggedIn("Session TikTok expirée : reconnecte-toi.")
+                on_session(True)
                 if page.url.startswith("about:") or "/login" in page.url:
                     page.goto(base + "/", wait_until="domcontentloaded")
                     page.wait_for_timeout(1500)
-                name = _detect_username(page, base) or username
-                if not name:
-                    raise SyncError("Impossible de trouver ton nom d'utilisateur TikTok : "
-                                    "renseigne TTS_TIKTOK_USERNAME dans .env.")
-                return _collect(page, base, name, known, stop_on_known, progress, max_minutes,
-                                interactive=not headless or login)
+                names = [username] if username else []  # @ forcé dans .env, ou trouvé la dernière fois
+                names += _username_candidates(page)
+                return _collect(page, base, names, known, stop_on_known, progress, max_minutes,
+                                interactive=not headless or login, on_username=on_username)
             except Exception:
                 _debug_shot(page, debug_dir)
                 raise
@@ -334,7 +374,7 @@ def account_state(db, profile: Path) -> dict:
     return {
         "available": is_available(),
         "username": db.kv_get(KV_USERNAME) or "",
-        "has_session": profile.is_dir() and any(profile.iterdir()),
+        "has_session": db.kv_get(KV_SESSION) == "1" and profile.is_dir(),
         "last_sync": float(last) if last else None,
         "full_done": db.kv_get(KV_FULL_DONE) == "1",
     }
@@ -350,8 +390,10 @@ def sync_into_db(db, settings, *, login: bool = False, full: bool = False,
     known = known_ids(db)
     stop_on_known = not full and db.kv_get(KV_FULL_DONE) == "1"
     opts = dict(profile=profile, known=known, stop_on_known=stop_on_known,
-                username=db.kv_get(KV_USERNAME) or settings.tiktok_username, channel=settings.browser,
-                base=base, progress=progress, debug_dir=settings.tmp_dir)
+                username=settings.tiktok_username or db.kv_get(KV_USERNAME) or "", channel=settings.browser,
+                base=base, progress=progress, debug_dir=settings.tmp_dir,
+                on_username=lambda n: db.kv_set(KV_USERNAME, n),
+                on_session=lambda ok: db.kv_set(KV_SESSION, "1") if ok else db.kv_delete(KV_SESSION))
     headless = settings.browser_headless and not login
     try:
         result = run(login=login, headless=headless, **opts)

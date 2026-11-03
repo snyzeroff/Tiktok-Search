@@ -468,12 +468,12 @@ function ago(ts) {
 }
 function renderAccount(a, f) {
   const line = $("#acctLine"), box = $("#acctActions");
-  const connected = a.has_session && a.username;
+  const connected = a.has_session;
   let text;
   if (!a.available) text = "Installe Playwright pour connecter ton compte : pip install playwright";
   else if (a.running) text = a.message || "Synchronisation…";
-  else if (a.message && a.error) text = a.message;
-  else if (connected) text = `Connecté : @${a.username}` + (a.last_sync ? ` · synchronisé ${ago(a.last_sync)}` : "") + (a.message ? `. ${a.message}` : "");
+  else if (a.message && a.error) text = (connected ? "Connecté. " : "") + a.message;
+  else if (connected) text = `Connecté${a.username ? " : @" + a.username : ""}` + (a.last_sync ? ` · synchronisé ${ago(a.last_sync)}` : "") + (a.message ? `. ${a.message}` : "");
   else text = "Pas encore connecté.";
   line.textContent = text;
   line.className = "small" + (a.error && !a.running ? " warn-text" : "");

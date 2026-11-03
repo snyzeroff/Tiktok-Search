@@ -80,7 +80,7 @@ def _start_account_sync(login: bool = False, full: bool = False) -> bool:
 
 def _sync_due() -> bool:
     state = browser_sync.account_state(db, browser_sync.default_profile_dir())
-    if not (state["available"] and state["has_session"] and state["username"]):
+    if not (state["available"] and state["has_session"]):
         return False
     return not state["last_sync"] or time.time() - state["last_sync"] >= settings.sync_interval_min * 60
 
@@ -335,7 +335,8 @@ def account_logout() -> dict:
     if account.running:
         raise HTTPException(409, "Une synchro est en cours, réessaie dans un instant.")
     browser_sync.forget_session(browser_sync.default_profile_dir())
-    db.kv_delete(browser_sync.KV_USERNAME, browser_sync.KV_LAST_SYNC, browser_sync.KV_FULL_DONE)
+    db.kv_delete(browser_sync.KV_USERNAME, browser_sync.KV_LAST_SYNC, browser_sync.KV_FULL_DONE,
+                 browser_sync.KV_SESSION)
     account.message, account.error = "Déconnecté. Tes favoris déjà importés restent dans l'index.", False
     return {"ok": True}
 
