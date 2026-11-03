@@ -186,7 +186,7 @@ def is_tiktok_search(host: str, port: int) -> bool:
 
 def parse_netstat_pid(output: str, port: int) -> int | None:
     """PID qui écoute sur ``port`` dans la sortie de ``netstat -ano`` (Windows)."""
-    for line in output.splitlines():
+    for line in (output or "").splitlines():
         parts = line.split()
         # En écoute = adresse distante 0.0.0.0:0 (l'intitulé LISTENING dépend de la langue de Windows).
         if len(parts) >= 5 and parts[0].upper() == "TCP" and parts[1].rsplit(":", 1)[-1] == str(port) \
@@ -199,11 +199,14 @@ def listening_pid(port: int) -> int | None:
     import subprocess
 
     try:
+        # Sortie lue en octets : la console Windows n'est pas en UTF-8 (« État » en cp850 en français),
+        # et on n'a besoin que des adresses et des numéros, en ASCII.
         if sys.platform == "win32":
-            out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True, timeout=10).stdout
-            return parse_netstat_pid(out, port)
-        out = subprocess.run(["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"], capture_output=True, text=True,
-                             timeout=10).stdout.split()
+            raw = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, timeout=10).stdout or b""
+            return parse_netstat_pid(raw.decode("ascii", errors="ignore"), port)
+        raw = subprocess.run(["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"], capture_output=True,
+                             timeout=10).stdout or b""
+        out = raw.decode("ascii", errors="ignore").split()
         return int(out[0]) if out else None
     except (OSError, ValueError, subprocess.SubprocessError):
         return None

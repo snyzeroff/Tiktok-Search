@@ -325,3 +325,17 @@ Connexions actives
 """
     assert parse_netstat_pid(out, 8000) == 36876
     assert parse_netstat_pid(out, 9000) is None
+
+
+def test_listening_pid_survives_non_utf8_console(monkeypatch):
+    """netstat sur Windows en français écrit « État » en cp850 (octet 0x90)."""
+    import subprocess as sp
+
+    from tiktok_search import cli
+
+    out = "  Proto  Adresse locale   Adresse distante   État\r\n  TCP    127.0.0.1:8000   0.0.0.0:0   LISTENING   16944\r\n"
+    monkeypatch.setattr(cli.sys, "platform", "win32")
+    monkeypatch.setattr(sp, "run", lambda *a, **k: sp.CompletedProcess(a, 0, out.encode("cp850"), b""))
+    assert cli.listening_pid(8000) == 16944
+    monkeypatch.setattr(sp, "run", lambda *a, **k: sp.CompletedProcess(a, 0, None, b""))
+    assert cli.listening_pid(8000) is None
