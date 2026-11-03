@@ -14,7 +14,7 @@ permissions:
 
 env:
   WHISPER_CPP_REF: v1.9.5
-  VULKAN_VERSION: 1.4.309.0
+  VULKAN_VERSION: ""  # vide = dernière version du SDK
 
 jobs:
   build:
@@ -28,11 +28,23 @@ jobs:
       - name: Installer le SDK Vulkan
         shell: pwsh
         run: |
-          curl.exe -fsSL -o "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_VERSION.exe"
-          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          # Version : celle fixée ci-dessus, sinon la dernière publiée par LunarG.
+          $v = $env:VULKAN_VERSION
+          if (-not $v) { $v = (Invoke-RestMethod "https://vulkan.lunarg.com/sdk/latest/windows.txt").Trim() }
+          $installer = "$env:RUNNER_TEMP\VulkanSDK-Installer.exe"
+          # LunarG a changé le nom du fichier selon les versions : on essaie les deux.
+          $ok = $false
+          foreach ($u in @("https://sdk.lunarg.com/sdk/download/$v/windows/vulkansdk-windows-X64-$v.exe",
+                           "https://sdk.lunarg.com/sdk/download/$v/windows/VulkanSDK-$v-Installer.exe")) {
+            curl.exe -fsSL -o $installer $u
+            if ($LASTEXITCODE -eq 0) { $ok = $true; Write-Host "SDK Vulkan $v : $u"; break }
+          }
+          if (-not $ok) { throw "SDK Vulkan $v introuvable" }
+          & $installer --root "C:\VulkanSDK\$v" --accept-licenses --default-answer --confirm-command install
           if ($LASTEXITCODE -ne 0) { throw "installation du SDK Vulkan échouée ($LASTEXITCODE)" }
-          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\$env:VULKAN_VERSION"
-          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$env:VULKAN_VERSION\bin"
+          if (-not (Test-Path "C:\VulkanSDK\$v\bin\glslc.exe")) { throw "glslc.exe absent du SDK Vulkan" }
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\$v"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$v\bin"
 
       - name: Compiler
         shell: pwsh
