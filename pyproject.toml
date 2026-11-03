@@ -28,4 +28,4 @@ build-backend = "setuptools.build_meta"
 include = ["tiktok_search*"]
 
 [tool.setuptools.package-data]
-tiktok_search = ["static/*"]
+tiktok_search = ["static/*", "static/fonts/*"]

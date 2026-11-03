@@ -30,6 +30,7 @@ ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"} | {
 
 app = FastAPI(title="TikTok Search")
 app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
+app.mount("/static", StaticFiles(directory=STATIC), name="static")
 _oauth_states: list[str] = []
 
 
@@ -60,7 +61,7 @@ async def security(request: Request, call_next):
     if request.url.path == "/":
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data: https:; media-src 'self'; frame-src https://www.tiktok.com; "
+            "img-src 'self' data: https:; media-src 'self'; font-src 'self'; frame-src https://www.tiktok.com; "
             "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
     return response
 

@@ -3,212 +3,426 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>TikTok Search</title>
+<link rel="preload" href="/static/fonts/bricolage.woff2" as="font" type="font/woff2" crossorigin>
 <style>
-  :root { --bg:#0f0f12; --card:#1a1a20; --card2:#22222a; --muted:#8b8b98; --text:#f2f2f5; --accent:#fe2c55; --accent2:#25f4ee; --mark:#fe2c5555; --border:#2a2a33; }
-  * { box-sizing:border-box; }
-  body { margin:0; font:15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); }
-  main { max-width:980px; margin:0 auto; padding:24px 16px 120px; }
-  h1 { font-size:28px; margin:0 0 4px; } h1 span { color:var(--accent); }
-  h2 { font-size:17px; margin:18px 0 8px; } h3 { font-size:15px; margin:0 0 4px; }
-  a { color:var(--accent2); }
-  .sub { color:var(--muted); margin:0 0 20px; }
-  .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px; margin-bottom:14px; }
-  .searchbar { display:flex; gap:8px; }
-  input[type=search], input[type=text], textarea, select { background:#0b0b0e; border:1px solid var(--border); color:var(--text); border-radius:10px; padding:10px 12px; font-size:15px; }
-  input[type=search] { flex:1; font-size:16px; padding:12px 14px; min-width:0; }
-  textarea { width:100%; }
-  button, .btn { background:var(--accent); color:#fff; border:0; border-radius:10px; padding:10px 16px; font-weight:600; cursor:pointer; text-decoration:none; display:inline-block; font-size:14px; white-space:nowrap; }
-  button.secondary, .btn.secondary { background:#2a2a33; color:var(--text); }
-  button.ghost { background:transparent; color:var(--muted); padding:6px 8px; }
-  button:disabled { opacity:.5; cursor:wait; }
-  .filters { display:flex; flex-wrap:wrap; gap:10px 14px; margin-top:12px; color:var(--muted); font-size:14px; align-items:center; }
-  .filters label { display:flex; gap:6px; align-items:center; cursor:pointer; }
-  .filters select { padding:6px 8px; font-size:14px; }
-  .stats { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:14px; } .stats b { color:var(--text); }
-  details summary { cursor:pointer; font-weight:600; }
-  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; }
-  .muted { color:var(--muted); } .small { font-size:13px; }
-  .progress { height:6px; background:#2a2a33; border-radius:4px; overflow:hidden; margin-top:8px; }
-  .progress div { height:100%; background:var(--accent2); width:0; transition:width .4s; }
+  @font-face {
+    font-family: "Bricolage"; src: url("/static/fonts/bricolage.woff2") format("woff2");
+    font-weight: 200 800; font-stretch: 75% 100%; font-display: swap;
+  }
+  /* ---------- tokens ---------- */
+  :root {
+    --paper: #EDEFF3; --surface: #FFFFFF; --sunk: #E3E6EC; --ink: #171A23; --muted: #5D6474; --faint: #8A90A0;
+    --line: #D9DDE5; --accent: #2F36C9; --accent-ink: #FFFFFF; --accent-soft: #E4E5FA;
+    --hit: #FFE14D; --hit-ink: #171A23; --danger: #C42B3B;
+    --shadow-pop: 0 1px 2px rgba(23,26,35,.06), 0 12px 32px -8px rgba(23,26,35,.18);
+    --r-s: 6px; --r-m: 10px; --r-l: 16px;
+    --font: "Bricolage", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #12141A; --surface: #1B1E26; --sunk: #242833; --ink: #ECEEF4; --muted: #9097A8; --faint: #6B7182;
+      --line: #2B2F3A; --accent: #8C92FF; --accent-ink: #12141A; --accent-soft: #262A4A; --danger: #FF6B7A;
+      --shadow-pop: 0 1px 2px rgba(0,0,0,.3), 0 16px 40px -8px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #12141A; --surface: #1B1E26; --sunk: #242833; --ink: #ECEEF4; --muted: #9097A8; --faint: #6B7182;
+    --line: #2B2F3A; --accent: #8C92FF; --accent-ink: #12141A; --accent-soft: #262A4A; --danger: #FF6B7A;
+    --shadow-pop: 0 1px 2px rgba(0,0,0,.3), 0 16px 40px -8px rgba(0,0,0,.6);
+  }
 
-  .result { display:flex; gap:14px; position:relative; }
-  .result.selected { border-color:var(--accent2); }
-  .select { position:absolute; top:10px; right:12px; width:18px; height:18px; accent-color:var(--accent2); cursor:pointer; }
-  .thumb { width:96px; height:128px; flex:none; border-radius:10px; background:#222 center/cover; position:relative; cursor:pointer; border:0; padding:0; }
-  .thumb img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; border-radius:10px; }
-  .thumb .badge { position:absolute; left:6px; bottom:6px; background:#000c; color:#fff; font-size:11px; border-radius:6px; padding:1px 6px; font-weight:600; }
-  .thumb .play { position:absolute; inset:0; display:grid; place-items:center; font-size:28px; opacity:0; transition:opacity .2s; background:#0006; border-radius:10px; }
-  .thumb:hover .play { opacity:1; }
-  .body { min-width:0; flex:1; padding-right:24px; }
-  .body h3 a { color:var(--accent2); text-decoration:none; cursor:pointer; }
-  .desc { color:var(--muted); font-size:14px; margin:0 0 6px; overflow-wrap:anywhere; }
-  .match { font-size:14px; margin:4px 0; overflow-wrap:anywhere; }
-  .tag { display:inline-block; font-size:11px; text-transform:uppercase; letter-spacing:.04em; background:#2a2a33; color:var(--muted); border-radius:6px; padding:1px 6px; margin-right:6px; }
-  mark { background:var(--mark); color:var(--text); border-radius:3px; padding:0 2px; }
-  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
-  .chip { background:var(--card2); border:1px solid var(--border); color:var(--text); border-radius:999px; padding:3px 10px; font-size:13px; cursor:pointer; max-width:100%; text-align:left; font-weight:400; display:inline-flex; gap:6px; align-items:baseline; }
-  .chip:hover { border-color:var(--accent2); }
-  .chip b { color:var(--accent2); font-variant-numeric:tabular-nums; }
-  .chip .t { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:340px; }
+  /* ---------- base ---------- */
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 400 16px/1.5 var(--font); font-optical-sizing: auto; }
+  a { color: var(--accent); text-underline-offset: 2px; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-s); }
+  mark { background: var(--hit); color: var(--hit-ink); border-radius: 3px; padding: 0 .12em; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+  .num { font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); } .small { font-size: 13.5px; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 0 16px; }
 
-  [hidden] { display:none !important; }
-  .selbar { position:fixed; left:50%; transform:translateX(-50%); bottom:16px; background:#111116f2; border:1px solid var(--accent2); border-radius:14px; padding:10px 14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; z-index:5; max-width:calc(100% - 24px); backdrop-filter:blur(6px); }
+  /* boutons */
+  .btn { display: inline-flex; align-items: center; gap: 8px; border: 0; border-radius: var(--r-m); padding: 10px 16px; font-weight: 600; font-size: 15px; cursor: pointer; text-decoration: none; white-space: nowrap; background: var(--accent); color: var(--accent-ink); }
+  .btn:hover { filter: brightness(1.08); }
+  .btn.quiet { background: var(--sunk); color: var(--ink); }
+  .btn.quiet:hover { filter: none; background: var(--line); }
+  .btn.bare { background: none; color: var(--muted); padding: 6px 8px; }
+  .btn.bare:hover { color: var(--ink); }
+  .btn:disabled { opacity: .55; cursor: progress; }
+  .icon-btn { width: 40px; height: 40px; flex: none; display: inline-grid; place-items: center; border: 1px solid var(--line); background: var(--surface); border-radius: var(--r-m); cursor: pointer; color: var(--muted); }
+  .icon-btn:hover { color: var(--ink); }
+  .icon-btn svg, .btn svg { width: 18px; height: 18px; }
 
-  dialog { width:min(1200px, 100vw - 24px); max-height:calc(100vh - 24px); padding:0; border:1px solid var(--border); border-radius:16px; background:var(--card); color:var(--text); }
-  dialog::backdrop { background:#000b; }
-  .dlg-head { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--card); z-index:2; }
-  .dlg-body { display:grid; grid-template-columns:minmax(260px, 420px) 1fr; gap:16px; padding:16px; }
-  .player { position:sticky; top:70px; align-self:start; }
-  .player video, .player iframe { width:100%; aspect-ratio:9/16; max-height:72vh; border:0; border-radius:12px; background:#000; display:block; }
-  .carousel { position:relative; }
-  .carousel img { width:100%; max-height:70vh; object-fit:contain; border-radius:12px; background:#000; display:block; }
-  .carousel .nav { position:absolute; top:50%; transform:translateY(-50%); background:#000a; border-radius:50%; width:38px; height:38px; padding:0; font-size:18px; }
-  .carousel .prev { left:8px; } .carousel .next { right:8px; }
-  .pages { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
-  .pages button { padding:4px 10px; background:#2a2a33; font-weight:500; }
-  .pages button.on { background:var(--accent2); color:#000; }
-  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:12px; flex-wrap:wrap; }
-  .tabs button { background:transparent; color:var(--muted); border-radius:8px 8px 0 0; }
-  .tabs button.on { color:var(--text); box-shadow:inset 0 -2px 0 var(--accent); }
-  .seglist { max-height:62vh; overflow:auto; padding-right:6px; }
-  .seg { display:flex; gap:10px; padding:5px 8px; border-radius:8px; cursor:pointer; align-items:baseline; }
-  .seg:hover { background:var(--card2); }
-  .seg.hit { background:#fe2c5514; }
-  .seg.active { outline:1px solid var(--accent2); }
-  .seg .tc { color:var(--accent2); font-variant-numeric:tabular-nums; flex:none; min-width:52px; font-size:13px; }
-  .seg .tx { overflow-wrap:anywhere; }
-  .an-sec { margin-bottom:14px; }
-  .an-item { padding:8px 10px; border-radius:10px; background:var(--card2); margin-bottom:6px; }
-  .an-item .chips { margin-top:4px; }
-  .screens { display:grid; grid-template-columns:repeat(auto-fill, minmax(90px, 1fr)); gap:8px; }
-  .screens figure { margin:0; cursor:pointer; } .screens img { width:100%; border-radius:8px; display:block; }
-  .screens figcaption { font-size:12px; color:var(--accent2); text-align:center; }
-  .empty { color:var(--muted); padding:20px 0; text-align:center; }
-  .toast { position:fixed; top:16px; left:50%; transform:translateX(-50%); background:#25f4ee; color:#000; padding:8px 14px; border-radius:10px; font-weight:600; z-index:20; }
-  @media (max-width:760px) {
-    .dlg-body { grid-template-columns:1fr; } .player { position:static; }
-    .player video, .player iframe { max-height:55vh; }
-    .thumb { width:72px; height:96px; } .searchbar { flex-direction:column; }
+  /* ---------- en-tête ---------- */
+  header.top { display: flex; align-items: center; gap: 12px; padding: 18px 0 8px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 750; font-stretch: 82%; font-size: 21px; letter-spacing: -.01em; margin-right: auto; }
+  .brand-mark { width: 26px; height: 26px; }
+  .status { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 6px 12px 6px 10px; font-size: 14px; cursor: pointer; color: var(--ink); }
+  .status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+  .status.busy .dot { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+  .status.warn .dot { background: var(--danger); }
+  @keyframes pulse { 50% { opacity: .3; } }
+
+  /* ---------- recherche ---------- */
+  .hero { padding: 28px 0 18px; }
+  .hero h1 { font-size: clamp(30px, 6vw, 44px); line-height: 1.05; font-weight: 750; font-stretch: 78%; letter-spacing: -.02em; margin: 0 0 18px; max-width: 18ch; }
+  .searchbox { display: flex; align-items: center; gap: 6px; background: var(--surface); border: 1.5px solid var(--line); border-radius: var(--r-l); padding: 6px 6px 6px 16px; box-shadow: var(--shadow-pop); }
+  .searchbox:focus-within { border-color: var(--accent); }
+  .searchbox svg { width: 22px; height: 22px; color: var(--faint); flex: none; }
+  .searchbox input { flex: 1; min-width: 0; border: 0; background: none; outline: none; font-size: 21px; padding: 10px 4px; }
+  .searchbox input::placeholder { color: var(--faint); }
+  .searchbox input::-webkit-search-cancel-button { display: none; }
+  .hint { margin: 10px 2px 0; font-size: 13.5px; color: var(--muted); }
+  .hint code { font-family: inherit; background: var(--sunk); border-radius: 4px; padding: 0 5px; color: var(--ink); }
+
+  .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-top: 16px; }
+  .seg-ctl { display: inline-flex; background: var(--sunk); border-radius: var(--r-m); padding: 3px; }
+  .seg-ctl button { border: 0; background: none; padding: 6px 12px; border-radius: 7px; font-size: 14px; font-weight: 550; color: var(--muted); cursor: pointer; }
+  .seg-ctl button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  .field-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .field-chips > span { font-size: 14px; color: var(--muted); margin-right: 2px; }
+  .fchip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 4px 11px; font-size: 13.5px; cursor: pointer; color: var(--faint); text-decoration: line-through; text-decoration-color: transparent; }
+  .fchip[aria-pressed="true"] { border-color: var(--ink); color: var(--ink); font-weight: 550; }
+  .fchip[aria-pressed="false"] { text-decoration-color: currentColor; }
+  .filters .end { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+  label.tgl { display: inline-flex; gap: 7px; align-items: center; font-size: 14px; color: var(--muted); cursor: pointer; }
+  select.plain { border: 1px solid var(--line); background: var(--surface); border-radius: var(--r-s); padding: 6px 8px; font-size: 14px; }
+  input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
+
+  /* ---------- résultats ---------- */
+  .results-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; padding: 14px 2px 8px; border-bottom: 1px solid var(--line); }
+  .results-head h2 { font-size: 15px; font-weight: 600; margin: 0; }
+  .legend { display: inline-flex; gap: 14px; font-size: 13px; color: var(--muted); }
+  .legend i { display: inline-block; width: 10px; height: 10px; background: var(--hit); box-shadow: 0 0 0 1px rgba(0,0,0,.2); border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+  .legend i.sq { border-radius: 2px; }
+  .list { list-style: none; margin: 0; padding: 0; }
+  .row { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; gap: 16px; padding: 18px 8px; border-bottom: 1px solid var(--line); }
+  .row:hover { background: color-mix(in srgb, var(--surface) 55%, transparent); }
+  .row.selected { background: var(--accent-soft); }
+  .thumb { position: relative; width: 92px; aspect-ratio: 3/4; border-radius: var(--r-m); overflow: hidden; background: var(--sunk); border: 0; padding: 0; cursor: pointer; display: block; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .25s; }
+  .thumb:hover img { transform: scale(1.04); }
+  .thumb .len { position: absolute; left: 6px; bottom: 6px; background: rgba(10,12,18,.78); color: #fff; font-size: 12px; font-weight: 600; border-radius: 5px; padding: 1px 6px; }
+  .who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 3px; }
+  .who a { font-weight: 650; color: var(--ink); text-decoration: none; cursor: pointer; }
+  .who a:hover { text-decoration: underline; }
+  .who time, .who .kind { font-size: 13.5px; color: var(--muted); }
+  .caption { margin: 0 0 4px; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .found { margin: 2px 0; font-size: 14.5px; overflow-wrap: anywhere; }
+  .found .where { color: var(--muted); font-size: 13px; margin-right: 6px; }
+  .pick { align-self: start; padding-top: 2px; }
+  .pick input { width: 18px; height: 18px; cursor: pointer; }
+
+  /* frise : la signature visuelle */
+  .strip { position: relative; height: 22px; margin: 14px 0 4px; }
+  .strip::before { content: ""; position: absolute; left: 0; right: 0; top: 10px; height: 3px; border-radius: 3px; background: var(--sunk); }
+  .strip .mk { position: absolute; top: 4px; width: 15px; height: 15px; margin-left: -7.5px; border: 2px solid var(--surface); background: var(--hit); border-radius: 50%; padding: 0; cursor: pointer; box-shadow: 0 0 0 1px rgba(0,0,0,.2); }
+  .strip .mk.ocr { border-radius: 3px; }
+  .strip .mk .n { position: absolute; top: -15px; left: 50%; transform: translateX(-50%); font-size: 10.5px; font-weight: 700; color: var(--muted); }
+  .strip .mk:hover, .strip .mk:focus-visible { transform: scale(1.3); z-index: 2; }
+  .strip .ends { position: absolute; right: 0; top: -14px; font-size: 11.5px; color: var(--faint); }
+  .pages-strip { display: flex; flex-wrap: wrap; gap: 4px; margin: 12px 0 4px; }
+  .pages-strip button { min-width: 28px; height: 28px; border: 1px solid var(--line); background: var(--surface); border-radius: var(--r-s); font-size: 12.5px; color: var(--muted); cursor: pointer; padding: 0 6px; font-variant-numeric: tabular-nums; }
+  .pages-strip button.hit { background: var(--hit); color: var(--hit-ink); border-color: transparent; font-weight: 650; }
+  @media (prefers-reduced-motion: no-preference) {
+    .strip.fresh .mk, .pages-strip.fresh .hit { animation: pop .38s cubic-bezier(.2,.9,.3,1.3) both; animation-delay: calc(var(--i, 0) * 45ms + 80ms); }
+  }
+  @keyframes pop { from { transform: scale(0); opacity: 0; } }
+  .moments { list-style: none; margin: 4px 0 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .moments li { min-width: 0; }
+  .moments button { display: flex; gap: 10px; align-items: baseline; width: 100%; text-align: left; border: 0; background: none; padding: 4px 6px; margin-left: -6px; border-radius: var(--r-s); cursor: pointer; font-size: 14.5px; }
+  .moments button:hover { background: var(--sunk); }
+  .moments .t { flex: none; min-width: 56px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .moments .x { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .moments .src { flex: none; font-size: 12.5px; color: var(--faint); margin-left: auto; padding-left: 8px; }
+  .more-moments { border: 0; background: none; color: var(--accent); font-size: 14px; padding: 4px 0; cursor: pointer; }
+
+  .empty { text-align: center; padding: 56px 16px; }
+  .empty h3 { font-size: 22px; font-stretch: 85%; margin: 0 0 8px; }
+  .empty p { color: var(--muted); max-width: 46ch; margin: 0 auto 18px; }
+  .loadmore { display: flex; justify-content: center; padding: 22px 0 8px; }
+
+  .selbar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 5; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-l); padding: 10px 12px 10px 16px; box-shadow: var(--shadow-pop); max-width: calc(100% - 24px); }
+  .selbar b { font-weight: 650; }
+
+  /* ---------- fenêtres ---------- */
+  dialog { border: 0; padding: 0; color: var(--ink); background: var(--surface); box-shadow: var(--shadow-pop); }
+  dialog::backdrop { background: rgba(12,14,20,.55); backdrop-filter: blur(2px); }
+  @media (prefers-reduced-motion: no-preference) { dialog[open] { animation: rise .2s ease-out; } }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px) scale(.99); } }
+  .viewer { width: min(1180px, 100vw - 24px); max-height: calc(100vh - 24px); border-radius: var(--r-l); }
+  .dlg-head { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 10px; padding: 12px 14px 12px 20px; background: var(--surface); border-bottom: 1px solid var(--line); }
+  .dlg-head .title { margin-right: auto; min-width: 0; }
+  .dlg-head .title b { font-size: 17px; }
+  .dlg-body { display: grid; grid-template-columns: minmax(260px, 400px) minmax(0, 1fr); gap: 24px; padding: 20px; }
+  .player { position: sticky; top: 76px; align-self: start; }
+  .player video, .player iframe { display: block; width: 100%; aspect-ratio: 9/16; max-height: 72vh; border: 0; border-radius: var(--r-m); background: #000; }
+  .carousel { position: relative; }
+  .carousel img { display: block; width: 100%; max-height: 70vh; object-fit: contain; border-radius: var(--r-m); background: var(--sunk); }
+  .carousel .nav { position: absolute; top: 50%; transform: translateY(-50%); width: 40px; height: 40px; border-radius: 50%; border: 0; background: rgba(255,255,255,.92); color: #171A23; box-shadow: var(--shadow-pop); cursor: pointer; font-size: 20px; }
+  .carousel .prev { left: 10px; } .carousel .next { right: 10px; }
+  .player .pages-strip { justify-content: center; }
+  .player .pages-strip button.on { outline: 2px solid var(--accent); outline-offset: 1px; color: var(--ink); }
+  .player .note { margin: 10px 2px 0; font-size: 13px; color: var(--muted); }
+  .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 14px; overflow-x: auto; }
+  .tabs button { border: 0; background: none; padding: 10px 12px; font-size: 15px; font-weight: 550; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+  .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+  .tabs .count { font-size: 12px; background: var(--hit); color: var(--hit-ink); border-radius: 999px; padding: 0 6px; margin-left: 5px; font-weight: 650; }
+  .toolrow { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .toolrow input { flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--paper); border-radius: var(--r-m); padding: 9px 12px; }
+  .seglist { max-height: 62vh; overflow: auto; padding-right: 6px; scroll-behavior: smooth; }
+  .seg { display: grid; grid-template-columns: 58px 1fr; gap: 10px; padding: 6px 8px 6px 10px; border-radius: var(--r-s); cursor: pointer; border-left: 3px solid transparent; }
+  .seg:hover { background: var(--sunk); }
+  .seg.active { border-left-color: var(--accent); background: var(--accent-soft); }
+  .seg .tc { color: var(--faint); font-variant-numeric: tabular-nums; font-size: 14px; padding-top: 1px; }
+  .seg.hit .tc { color: var(--ink); font-weight: 650; }
+  .seg .tx { overflow-wrap: anywhere; }
+
+  .an-sec { margin: 0 0 22px; }
+  .an-sec > h3 { font-size: 15px; font-weight: 650; margin: 0 0 8px; display: flex; gap: 8px; align-items: baseline; }
+  .an-sec > h3 .muted { font-weight: 400; font-size: 13.5px; }
+  .an-summary { font-size: 17px; line-height: 1.5; margin: 0 0 10px; max-width: 65ch; }
+  .an-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+  .an-list > li { padding: 10px 0; border-bottom: 1px solid var(--line); display: grid; gap: 3px; }
+  .an-name { font-weight: 650; }
+  .an-name .cat { font-weight: 400; color: var(--muted); font-size: 13.5px; margin-left: 8px; }
+  .an-refs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+  .ref { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 2px 10px; font-size: 13px; cursor: pointer; color: var(--ink); font-variant-numeric: tabular-nums; text-decoration: none; }
+  .ref:hover { border-color: var(--accent); }
+  .ref.code { background: var(--hit); color: var(--hit-ink); border-color: transparent; font-weight: 650; }
+  .screens { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
+  .screens figure { margin: 0; cursor: pointer; }
+  .screens img { width: 100%; border-radius: var(--r-s); display: block; }
+  .screens figcaption { font-size: 12.5px; text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .an-foot { font-size: 13px; color: var(--faint); margin-top: 12px; }
+  .warn-box { background: color-mix(in srgb, var(--danger) 10%, var(--surface)); border-radius: var(--r-m); padding: 10px 12px; font-size: 14px; margin-bottom: 14px; }
+  .info-box { background: var(--sunk); border-radius: var(--r-m); padding: 10px 12px; font-size: 14px; margin-bottom: 14px; color: var(--muted); }
+  .runrow { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+
+  .report { width: min(860px, 100vw - 24px); max-height: calc(100vh - 24px); border-radius: var(--r-l); }
+  .report .body { padding: 20px 22px 26px; }
+
+  /* panneau latéral : favoris & réglages */
+  .drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100vh; width: min(460px, 100vw); border-radius: var(--r-l) 0 0 var(--r-l); }
+  .drawer .body { padding: 8px 22px 30px; }
+  .drawer h3 { font-size: 16px; margin: 24px 0 6px; }
+  .drawer p { margin: 0 0 10px; color: var(--muted); font-size: 14.5px; }
+  .drawer textarea { width: 100%; border: 1px solid var(--line); background: var(--paper); border-radius: var(--r-m); padding: 10px 12px; font-size: 14px; resize: vertical; }
+  .drawer .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; align-items: center; }
+  .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border-radius: var(--r-m); overflow: hidden; margin: 10px 0 4px; }
+  .stat-grid div { background: var(--surface); padding: 10px 12px; }
+  .stat-grid b { display: block; font-size: 22px; font-weight: 700; font-stretch: 85%; font-variant-numeric: tabular-nums; }
+  .stat-grid span { font-size: 12.5px; color: var(--muted); }
+  .feat { list-style: none; padding: 0; margin: 6px 0 0; font-size: 14px; display: grid; gap: 4px; }
+  .feat li { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px dashed var(--line); padding: 4px 0; }
+  .feat .on { color: var(--ink); font-weight: 600; } .feat .off { color: var(--faint); }
+  .progress { height: 4px; background: var(--sunk); border-radius: 4px; overflow: hidden; margin: 8px 0; }
+  .progress div { height: 100%; background: var(--accent); width: 0; transition: width .4s; }
+  .file-pick { display: flex; align-items: center; gap: 10px; border: 1.5px dashed var(--line); border-radius: var(--r-m); padding: 14px; cursor: pointer; background: var(--paper); font-size: 14.5px; }
+  .file-pick:hover, .file-pick.drag { border-color: var(--accent); }
+  .file-pick input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .msg { min-height: 20px; font-size: 14px; margin-top: 8px; }
+
+  .toast { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); z-index: 30; background: var(--ink); color: var(--paper); padding: 9px 16px; border-radius: var(--r-m); font-weight: 600; font-size: 14.5px; box-shadow: var(--shadow-pop); }
+  footer { padding: 40px 0 120px; color: var(--faint); font-size: 13px; }
+
+  @media (max-width: 760px) {
+    .dlg-body { grid-template-columns: minmax(0, 1fr); padding: 14px; } .player { position: static; }
+    .player video, .player iframe { max-height: 48vh; margin: 0 auto; width: auto; max-width: 100%; }
+    .row { grid-template-columns: 68px minmax(0, 1fr) auto; gap: 12px; padding: 16px 2px; }
+    .thumb { width: 68px; }
+    .filters .end { margin-left: 0; }
+    .searchbox input { font-size: 18px; }
+    .searchbox .btn { padding: 10px 12px; }
+    .moments .src { display: none; }
+    .dlg-head #dlgOpen { display: none; }
   }
 </style>
 </head>
 <body>
-<main>
-  <h1>TikTok <span>Search</span></h1>
-  <p class="sub">Retrouve n'importe quelle vidéo ou carrousel de tes favoris grâce à sa légende, ses hashtags, ce qui y est dit ou écrit — et va directement au bon moment.</p>
-
-  <div class="card">
-    <form id="search" class="searchbar">
-      <input type="search" id="q" placeholder='ex : recette pâtes  ·  "plan de travail"  ·  #astuce -pub   (raccourci : /)' autofocus>
-      <button>Rechercher</button>
-    </form>
-    <div class="filters" id="filters">
-      <span id="fieldboxes"></span>
-      <label><input type="checkbox" id="any"> au moins un des mots</label>
-      <select id="kind"><option value="">Vidéos + carrousels</option><option value="video">Vidéos</option><option value="photo">Carrousels</option></select>
-      <select id="sort"><option value="relevance">Pertinence</option><option value="date">Date d'ajout</option></select>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 26 26" aria-hidden="true"><rect x="1" y="1" width="24" height="24" rx="7" fill="var(--ink)"/><rect x="5" y="11.5" width="16" height="3" rx="1.5" fill="var(--paper)" opacity=".35"/><circle cx="9.5" cy="13" r="3" fill="var(--hit)"/><rect x="15" y="10" width="6" height="6" rx="1.5" fill="var(--hit)"/></svg>
+      TikTok Search
     </div>
-  </div>
+    <button class="status" id="statusBtn" type="button" title="Favoris et réglages"><span class="dot"></span><span id="statusText">…</span></button>
+    <button class="icon-btn" id="themeBtn" type="button"></button>
+  </header>
 
-  <div class="card">
-    <div class="stats" id="stats">Chargement…</div>
-    <div class="progress" id="progressbar" hidden><div></div></div>
-    <details style="margin-top:12px">
-      <summary>Ajouter mes favoris / réglages</summary>
-      <p class="muted">Option 1 — <b>Connecter mon compte TikTok</b> (API Data Portability, Europe uniquement, l'export peut prendre quelques heures) :</p>
-      <div class="row"><a class="btn" href="/auth/tiktok/login">Connecter TikTok</a>
-        <button class="secondary" id="sync" type="button">Vérifier / importer l'export</button></div>
-      <p class="muted">Option 2 — <b>Importer l'export</b> : TikTok → Paramètres → Compte → Télécharger tes données → format <b>JSON</b>, puis dépose le fichier (.zip ou .json) :</p>
-      <form id="upload" class="row">
-        <input type="file" name="file" accept=".json,.zip" required>
-        <label class="muted"><input type="checkbox" name="likes" value="true"> inclure les likes</label>
-        <button>Importer</button>
-      </form>
-      <p class="muted">Option 3 — <b>Coller des liens</b> de vidéos ou carrousels (un par ligne) :</p>
-      <form id="links">
-        <textarea name="text" rows="3" placeholder="https://www.tiktok.com/@user/video/7300000000000000000&#10;https://www.tiktok.com/@user/photo/7300000000000000001"></textarea>
-        <div class="row"><button>Ajouter</button>
-          <button class="secondary" type="button" id="retry">Relancer les erreurs</button>
-          <button class="secondary" type="button" id="reindex">Tout réindexer</button></div>
-      </form>
-      <p class="muted small" id="msg"></p>
-    </details>
-  </div>
+  <section class="hero">
+    <h1>Retrouve le moment exact.</h1>
+    <form id="search" class="searchbox" role="search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input type="search" id="q" placeholder="Un mot, un outil, une phrase entendue…" autocomplete="off" aria-label="Rechercher dans mes favoris" autofocus>
+      <button class="btn" type="submit">Rechercher</button>
+    </form>
+    <p class="hint">Astuces : <code>"plan de travail"</code> pour une expression exacte, <code>-pub</code> pour exclure, <code>/</code> pour revenir ici.</p>
+    <div class="filters" id="filters">
+      <div class="seg-ctl" id="kindCtl" role="group" aria-label="Type">
+        <button type="button" data-kind="" aria-pressed="true">Tout</button>
+        <button type="button" data-kind="video" aria-pressed="false">Vidéos</button>
+        <button type="button" data-kind="photo" aria-pressed="false">Carrousels</button>
+      </div>
+      <div class="field-chips" id="fieldboxes" role="group" aria-label="Chercher dans"></div>
+      <div class="end">
+        <label class="tgl"><input type="checkbox" id="any"> Au moins un des mots</label>
+        <select id="sort" class="plain" aria-label="Tri"><option value="relevance">Plus pertinents</option><option value="date">Plus récents</option></select>
+      </div>
+    </div>
+  </section>
 
-  <div id="results"></div>
-</main>
+  <main id="results" aria-live="polite"></main>
+  <footer>Tout reste sur ton ordinateur. Les analyses IA ne partent que quand tu les demandes.</footer>
+</div>
 
 <div class="selbar" id="selbar" hidden>
   <b id="selcount"></b>
-  <select id="mode" title="Coût de l'analyse">
+  <select id="mode" class="plain" title="Ce que l'IA reçoit">
     <option value="text">Texte seul (le moins cher)</option>
     <option value="auto">Auto (captures si peu de texte)</option>
-    <option value="screens">Smart screens (texte + captures)</option>
+    <option value="screens">Texte + captures clés</option>
   </select>
-  <button id="analyzeSel">Analyser</button>
-  <button class="secondary" id="selAll">Tout sélectionner</button>
-  <button class="ghost" id="selClear">Effacer</button>
+  <button class="btn" id="analyzeSel" type="button">Analyser</button>
+  <button class="btn quiet" id="selAll" type="button">Tout sélectionner</button>
+  <button class="btn bare" id="selClear" type="button">Annuler</button>
 </div>
 
-<dialog id="dlg">
-  <div class="dlg-head"><div id="dlgTitle"></div><div class="row" style="margin:0"><a class="btn secondary" id="dlgOpen" target="_blank" rel="noopener">Ouvrir sur TikTok ↗</a><button class="secondary" onclick="closeDlg()">✕</button></div></div>
+<dialog id="dlg" class="viewer" aria-labelledby="dlgTitle">
+  <div class="dlg-head">
+    <div class="title" id="dlgTitle"></div>
+    <a class="btn quiet" id="dlgOpen" target="_blank" rel="noopener">Ouvrir sur TikTok</a>
+    <button class="icon-btn" type="button" onclick="closeDlg()" aria-label="Fermer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </div>
   <div class="dlg-body">
     <div class="player" id="player"></div>
     <div>
-      <div class="tabs" id="tabs"></div>
+      <div class="tabs" id="tabs" role="tablist"></div>
       <div id="tabbody"></div>
     </div>
   </div>
 </dialog>
 
-<dialog id="adlg">
-  <div class="dlg-head"><b id="adlgTitle">Analyse</b><div class="row" style="margin:0" id="adlgActions"></div></div>
-  <div style="padding:16px" id="adlgBody"></div>
+<dialog id="adlg" class="report" aria-labelledby="adlgTitle">
+  <div class="dlg-head"><div class="title"><b id="adlgTitle">Analyse</b></div><div id="adlgActions" style="display:flex;gap:6px;flex-wrap:wrap"></div></div>
+  <div class="body" id="adlgBody"></div>
+</dialog>
+
+<dialog id="drawer" class="drawer" aria-labelledby="drawerTitle">
+  <div class="dlg-head"><div class="title"><b id="drawerTitle">Mes favoris</b></div>
+    <button class="icon-btn" type="button" onclick="document.getElementById('drawer').close()" aria-label="Fermer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+  <div class="body">
+    <div id="stats"></div>
+    <div class="progress" id="progressbar" hidden><div></div></div>
+    <div id="jobline" class="small"></div>
+
+    <h3>Importer l'export TikTok</h3>
+    <p>Dans TikTok : Profil, Paramètres et confidentialité, Compte, Télécharger tes données, au format JSON. Dépose ensuite le fichier ici.</p>
+    <form id="upload">
+      <label class="file-pick" id="filePick"><input type="file" name="file" accept=".json,.zip,.txt" required><span id="fileLabel">Choisir le .zip ou le .json…</span></label>
+      <div class="actions"><label class="tgl small"><input type="checkbox" name="likes" value="true"> Inclure les vidéos likées</label><span style="flex:1"></span><button class="btn" type="submit">Importer</button></div>
+    </form>
+
+    <h3>Coller des liens</h3>
+    <p>Un lien de vidéo ou de carrousel par ligne. Les liens courts du bouton Partager fonctionnent.</p>
+    <form id="links">
+      <textarea name="text" rows="3" placeholder="https://www.tiktok.com/@compte/video/7300000000000000000"></textarea>
+      <div class="actions"><button class="btn" type="submit">Ajouter</button></div>
+    </form>
+
+    <h3>Connecter mon compte</h3>
+    <p>Import automatique par l'API officielle de TikTok, réservé à l'Europe. L'export prend quelques heures.</p>
+    <div class="actions"><a class="btn quiet" href="/auth/tiktok/login">Connecter TikTok</a><button class="btn bare" id="sync" type="button">Vérifier l'export</button></div>
+
+    <h3>Entretien</h3>
+    <div class="actions"><button class="btn quiet" type="button" id="retry">Réessayer les échecs</button><button class="btn bare" type="button" id="reindex">Tout réindexer</button></div>
+    <p class="msg" id="msg" role="status"></p>
+
+    <h3>Moteurs</h3>
+    <ul class="feat" id="features"></ul>
+  </div>
 </dialog>
 
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const hl = s => esc(s).replaceAll("\x02", "<mark>").replaceAll("\x03", "</mark>");
+const plain = s => String(s ?? "").replace(/[\x02\x03]/g, "");
 const fmt = t => t == null ? "" : `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
-const toast = m => { const d = Object.assign(document.createElement("div"), { className: "toast", textContent: m }); document.body.append(d); setTimeout(() => d.remove(), 2200); };
-let labels = {}, features = {}, lastResults = [], selected = new Set(), lastQuery = "", refreshTimer = null, searchSeq = 0, pageSize = 50, hasMore = false;
+const toast = m => { const d = Object.assign(document.createElement("div"), { className: "toast", textContent: m, role: "status" }); document.body.append(d); setTimeout(() => d.remove(), 2200); };
+const fmtDate = s => { if (!s) return ""; const d = new Date(s.replace(" ", "T")); return isNaN(d) ? s : d.toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" }); };
+const plural = (n, w) => `${n} ${w}${n > 1 ? "s" : ""}`;
+let labels = {}, features = {}, lastResults = [], selected = new Set(), lastQuery = "", refreshTimer = null, searchSeq = 0, pageSize = 50, hasMore = false, kindFilter = "";
 
-// Appels API : en-tête anti-CSRF sur les POST, erreurs lisibles.
+// ---------- thème ----------
+const THEMES = ["auto", "light", "dark"];
+const THEME_ICON = {
+  auto: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>',
+  light: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+  dark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>',
+};
+const THEME_NAME = { auto: "Thème : automatique", light: "Thème : clair", dark: "Thème : sombre" };
+function applyTheme(t) {
+  if (t === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = t;
+  $("#themeBtn").innerHTML = THEME_ICON[t]; $("#themeBtn").title = THEME_NAME[t]; $("#themeBtn").setAttribute("aria-label", THEME_NAME[t]);
+  try { localStorage.setItem("tts-theme", t); } catch {}
+}
+let theme = "auto"; try { theme = localStorage.getItem("tts-theme") || "auto"; } catch {}
+if (!THEMES.includes(theme)) theme = "auto";
+applyTheme(theme);
+$("#themeBtn").onclick = () => { theme = THEMES[(THEMES.indexOf(theme) + 1) % 3]; applyTheme(theme); };
+
+// ---------- API ----------
 async function api(url, opts = {}) {
   const o = { ...opts, headers: { ...(opts.headers || {}) } };
-  if (o.method && o.method !== "GET") o.headers["X-TTS"] = "1";
+  if (o.method && o.method !== "GET") o.headers["X-TTS"] = "1";   // protection anti-CSRF côté serveur
   let r;
-  try { r = await fetch(url, o); } catch { throw new Error("Serveur injoignable — est-il toujours lancé ?"); }
+  try { r = await fetch(url, o); } catch { throw new Error("Le serveur ne répond pas. Vérifie qu'il est toujours lancé."); }
   let data = null;
-  try { data = await r.json(); } catch { /* réponse non JSON */ }
+  try { data = await r.json(); } catch {}
   if (!r.ok) throw new Error((data && (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail))) || `Erreur ${r.status}`);
   return data;
 }
 
-// ---------- statut ----------
+// ---------- état ----------
 async function refresh() {
-  clearTimeout(refreshTimer);  // une seule boucle de rafraîchissement, quel que soit l'appelant
+  clearTimeout(refreshTimer);
   let r;
   try { r = await api("/api/status"); }
-  catch (e) { $("#stats").textContent = "⚠️ " + e.message; refreshTimer = setTimeout(refresh, 5000); return; }
+  catch (e) { $("#statusText").textContent = "Hors ligne"; $("#statusBtn").className = "status warn"; refreshTimer = setTimeout(refresh, 5000); return; }
   labels = r.fields; features = r.features;
   if (!$("#fieldboxes").childElementCount) {
-    $("#fieldboxes").innerHTML = '<span>Chercher dans : </span>' + Object.entries(labels).map(([k, v]) =>
-      `<label style="display:inline-flex;margin-right:10px"><input type="checkbox" name="field" value="${k}" checked> ${esc(v)}</label>`).join("");
+    $("#fieldboxes").innerHTML = '<span>Dans</span>' + Object.entries(labels).map(([k, v]) =>
+      `<button type="button" class="fchip" data-field="${k}" aria-pressed="true">${esc(v)}</button>`).join("");
   }
   const s = r.stats, j = r.job, f = r.features;
-  $("#stats").innerHTML = `<span><b>${s.total}</b> favoris (${s.videos} vidéos, ${s.carousels} carrousels)</span><span><b>${s.done}</b> indexés</span>
-    <span><b>${s.with_transcript}</b> transcrits</span><span><b>${s.analysed}</b> analysés</span><span><b>${s.pending}</b> en attente</span><span><b>${s.error}</b> erreurs</span>${s.unavailable ? `<span><b>${s.unavailable}</b> indisponibles</span>` : ""}
-    <span>Whisper ${f.whisper ? "✅" : "—"} · OCR ${f.ocr ? "✅" : "—"} · IA ${f.llm !== "none" ? "✅ " + esc(f.llm_model) : "— (extraction locale seule)"} · TikTok ${f.tiktok_connected ? "connecté ✅" : (f.tiktok_oauth ? "non connecté" : "non configuré")}</span>`;
-  if (!f.ffmpeg && (f.whisper || f.ocr)) $("#stats").innerHTML += `<span style="color:var(--accent)">⚠️ ffmpeg introuvable : transcription et OCR impossibles</span>`;
-  if (j.running || j.message) $("#stats").innerHTML += `<span>${j.running ? `Indexation ${j.done}/${j.total}… <button class="ghost" id="cancelJob">Arrêter</button>` : ""} ${esc(j.message)}</span>`;
-  $("#cancelJob")?.addEventListener("click", () => post("/api/process/cancel"));
+  const pct = Math.round(100 * j.done / Math.max(1, j.total));
+  $("#statusBtn").className = "status" + (j.running ? " busy" : (s.error || (!f.ffmpeg && (f.whisper || f.ocr)) ? " warn" : ""));
+  $("#statusText").textContent = j.running ? `Indexation ${j.done}/${j.total}` : plural(s.total, "favori");
+  $("#stats").innerHTML = `<div class="stat-grid">
+      <div><b>${s.total}</b><span>favoris</span></div><div><b>${s.done}</b><span>indexés</span></div><div><b>${s.analysed}</b><span>analysés</span></div>
+      <div><b>${s.videos}</b><span>vidéos</span></div><div><b>${s.carousels}</b><span>carrousels</span></div><div><b>${s.with_transcript}</b><span>transcrits</span></div>
+    </div>
+    <p class="small muted" style="margin:6px 0 0">${s.pending ? `${s.pending} en attente. ` : ""}${s.error ? `${s.error} en échec. ` : ""}${s.unavailable ? `${s.unavailable} supprimés ou privés.` : ""}</p>`;
   $("#progressbar").hidden = !j.running;
-  if (j.running) $("#progressbar div").style.width = (100 * j.done / Math.max(1, j.total)) + "%";
+  $("#progressbar div").style.width = pct + "%";
+  $("#jobline").innerHTML = (j.running ? `Indexation en cours, ${pct} %. <button class="btn bare" id="cancelJob" type="button">Arrêter</button> ` : "") + esc(j.message);
+  $("#cancelJob")?.addEventListener("click", () => post("/api/process/cancel"));
+  const yes = (on, label, off) => `<span class="${on ? "on" : "off"}">${on ? label : off}</span>`;
+  $("#features").innerHTML = `
+    <li>Transcription (Whisper) ${yes(f.whisper, "activée", "non installée")}</li>
+    <li>Texte à l'écran (OCR) ${yes(f.ocr, "activé", "désactivé")}</li>
+    <li>ffmpeg ${yes(f.ffmpeg, "trouvé", "introuvable")}</li>
+    <li>Analyse IA ${yes(f.llm !== "none", esc(f.llm_model), "extraction locale seule")}</li>
+    <li>Compte TikTok ${yes(f.tiktok_connected, "connecté", f.tiktok_oauth ? "non connecté" : "non configuré")}</li>`;
   refreshTimer = setTimeout(refresh, j.running ? 2000 : 10000);
 }
+$("#statusBtn").onclick = () => $("#drawer").showModal();
 
 // ---------- recherche ----------
 async function doSearch(e, more = false) {
@@ -219,49 +433,88 @@ async function doSearch(e, more = false) {
   let url;
   if (q) {
     p.set("q", q);
-    const boxes = [...document.querySelectorAll('input[name=field]')];
-    if (!boxes.some(b => b.checked)) { $("#results").innerHTML = `<p class="empty">Coche au moins un champ où chercher.</p>`; return; }
-    if (boxes.some(b => !b.checked)) boxes.filter(b => b.checked).forEach(b => p.append("field", b.value));
+    const chips = [...document.querySelectorAll(".fchip")];
+    const on = chips.filter(c => c.getAttribute("aria-pressed") === "true");
+    if (chips.length && !on.length) { $("#results").innerHTML = `<div class="empty"><h3>Aucun champ sélectionné</h3><p>Active au moins un endroit où chercher : légende, transcription…</p></div>`; return; }
+    if (on.length < chips.length) on.forEach(c => p.append("field", c.dataset.field));
     if ($("#any").checked) p.set("any", "true");
     p.set("sort", $("#sort").value);
     url = "/api/search?";
   } else url = "/api/videos?";
-  if ($("#kind").value) p.set("kind", $("#kind").value);
+  if (kindFilter) p.set("kind", kindFilter);
   history.replaceState(null, "", q ? "?q=" + encodeURIComponent(q) : location.pathname);
   let r;
-  try { r = await api(url + p); } catch (err) { if (seq === searchSeq) $("#results").innerHTML = `<p class="empty">⚠️ ${esc(err.message)}</p>`; return; }
-  if (seq !== searchSeq) return;  // une recherche plus récente est déjà partie
+  try { r = await api(url + p); } catch (err) { if (seq === searchSeq) $("#results").innerHTML = `<div class="empty"><h3>Recherche impossible</h3><p>${esc(err.message)}</p></div>`; return; }
+  if (seq !== searchSeq) return;   // une recherche plus récente est déjà partie
   lastResults = more ? lastResults.concat(r.results) : r.results;
   hasMore = r.results.length === pageSize;
-  renderResults(q);
+  renderResults(q, more ? lastResults.length - r.results.length : 0);
 }
 
-function hitChip(v, h) {
-  const where = h.page ? `Page ${h.page}` : fmt(h.start);
-  const icon = h.page ? "🖼" : (h.kind === "ocr" ? "🔤" : "▶");
-  const pos = h.page ? `page:${h.page}` : `t:${h.start}`;
-  return `<button class="chip" data-open="${esc(v.id)}" data-pos="${pos}" data-tab="${h.kind}" title="${esc((h.text || "").replace(/[\x02\x03]/g, ""))}">
-    <b>${icon} ${where}</b><span class="t">${hl(h.text)}</span></button>`;
+// Frise des moments (vidéo) ou cases de pages (carrousel)
+function strip(v, hits, animate) {
+  const fresh = animate ? " fresh" : "";
+  if (v.kind === "photo") {
+    const n = v.images.length; if (!n || !hits.length) return "";
+    const hitPages = new Set(hits.filter(h => h.page).map(h => h.page));
+    let i = 0;
+    return `<div class="pages-strip${fresh}" role="group" aria-label="Pages du carrousel">${v.images.map((_, k) => {
+      const p = k + 1, on = hitPages.has(p);
+      return `<button type="button" class="${on ? "hit" : ""}" style="--i:${on ? i++ : 0}" data-open="${esc(v.id)}" data-pos="page:${p}" data-tab="ocr" title="Page ${p}${on ? ", contient la recherche" : ""}">${p}</button>`;
+    }).join("")}</div>`;
+  }
+  const timed = hits.filter(h => h.start != null);
+  if (!timed.length) return "";
+  const dur = Math.max(v.duration || 0, ...timed.map(h => (h.end || h.start) + 1));
+  // Repères trop proches (moins de 2,5 % de la durée) regroupés en un seul, pour rester cliquables.
+  const groups = [];
+  for (const h of [...timed].sort((a, b) => a.start - b.start)) {
+    const g = groups[groups.length - 1];
+    if (g && (h.start - g[0].start) / dur < 0.025) g.push(h); else groups.push([h]);
+  }
+  return `<div class="strip${fresh}" role="group" aria-label="Moments dans la vidéo"><span class="ends num">${fmt(dur)}</span>${groups.map((g, i) => {
+    const h = g.find(x => x.kind === "transcript") || g[0];
+    const title = g.map(x => `${fmt(x.start)}, ${x.kind === "ocr" ? "à l'écran" : "prononcé"} : ${plain(x.text)}`).join("\n");
+    return `<button type="button" class="mk ${g.every(x => x.kind === "ocr") ? "ocr" : ""}" style="left:${Math.min(99.5, 100 * g[0].start / dur).toFixed(2)}%;--i:${i}" data-open="${esc(v.id)}" data-pos="t:${g[0].start}" data-tab="${h.kind}" title="${esc(title)}" aria-label="Aller à ${fmt(g[0].start)}">${g.length > 1 ? `<span class="n num">${g.length}</span>` : ""}</button>`;
+  }).join("")}</div>`;
 }
 
-function renderResults(q) {
+function momentList(v, hits) {
+  const shown = hits.slice(0, 3);
+  if (!shown.length) return "";
+  return `<ul class="moments">${shown.map(h => `<li><button type="button" data-open="${esc(v.id)}" data-pos="${h.page ? "page:" + h.page : "t:" + h.start}" data-tab="${h.kind}">
+      <span class="t">${h.page ? "Page " + h.page : fmt(h.start)}</span><span class="x">${hl(h.text)}</span><span class="src">${h.page ? "" : h.kind === "ocr" ? "à l'écran" : "prononcé"}</span></button></li>`).join("")}</ul>
+    ${hits.length > 3 ? `<button type="button" class="more-moments" data-open="${esc(v.id)}" data-tab="${hits[0].kind}">Voir les ${hits.length} passages</button>` : ""}`;
+}
+
+function renderResults(q, from = 0) {
   const res = lastResults;
-  if (!res.length) { $("#results").innerHTML = `<p class="empty">${q ? "Aucun résultat." : "Aucune vidéo indexée pour l'instant — ajoute tes favoris ci-dessus."}</p>`; return; }
-  $("#results").innerHTML = `<p class="muted">${q ? res.length + (hasMore ? "+" : "") + " résultat(s)" : "Derniers favoris"}</p>` + res.map(v => {
-    const badge = v.kind === "photo" ? `Carrousel · ${v.images.length} p.` : (v.duration ? fmt(v.duration) : "Vidéo");
+  if (!res.length) {
+    $("#results").innerHTML = q
+      ? `<div class="empty"><h3>Rien trouvé pour « ${esc(q)} »</h3><p>Essaie un mot plus court, coche « Au moins un des mots », ou retire un filtre.</p></div>`
+      : `<div class="empty"><h3>Commence par ajouter tes favoris</h3><p>Importe l'export de tes données TikTok ou colle quelques liens. Chaque vidéo devient cherchable jusque dans ce qui y est dit.</p><button class="btn" type="button" onclick="document.getElementById('drawer').showModal()">Ajouter mes favoris</button></div>`;
+    return;
+  }
+  const head = `<div class="results-head"><h2>${q ? `${res.length}${hasMore ? "+" : ""} résultat${res.length > 1 ? "s" : ""}` : "Ajoutés récemment"}</h2>
+    ${q ? `<span class="legend"><span><i></i>prononcé</span><span><i class="sq"></i>à l'écran</span></span>` : ""}</div>`;
+  const rows = res.map((v, idx) => {
     const hits = v.hits || [];
-    const shown = hits.slice(0, 8);
-    return `<div class="card result ${selected.has(v.id) ? "selected" : ""}" data-id="${esc(v.id)}">
-      <input type="checkbox" class="select" data-sel="${esc(v.id)}" ${selected.has(v.id) ? "checked" : ""} title="Sélectionner pour l'analyse">
-      <button class="thumb" data-open="${esc(v.id)}">${v.thumbnail ? `<img src="${esc(v.thumbnail)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}<span class="play">${v.kind === "photo" ? "🖼" : "▶"}</span><span class="badge">${badge}</span></button>
-      <div class="body">
-        <h3><a data-open="${esc(v.id)}">@${esc(v.author || "inconnu")}</a> <span class="muted small" style="font-weight:400">${esc(v.favorited_at)}</span></h3>
-        ${v.matches.description ? "" : `<p class="desc">${esc((v.description || "").slice(0, 180))}</p>`}
-        ${Object.entries(v.matches).filter(([k]) => !(k === "transcript" && hits.some(h => h.kind === "transcript")) && !(k === "ocr_text" && hits.some(h => h.kind === "ocr")))
-          .map(([k, s]) => `<p class="match"><span class="tag">${esc(labels[k] || k)}</span>${hl(s)}</p>`).join("")}
-        ${shown.length ? `<div class="chips">${shown.map(h => hitChip(v, h)).join("")}${hits.length > shown.length ? `<button class="chip" data-open="${esc(v.id)}" data-tab="transcript">+${hits.length - shown.length} autres</button>` : ""}</div>` : ""}
-      </div></div>`;
-  }).join("") + (hasMore ? `<div class="row" style="justify-content:center"><button class="secondary" id="more">Charger plus</button></div>` : "");
+    const len = v.kind === "photo" ? `${v.images.length} p.` : (v.duration ? fmt(v.duration) : "");
+    const fields = Object.entries(v.matches).filter(([k]) => k !== "description" && !(k === "transcript" && hits.some(h => h.kind === "transcript")) && !(k === "ocr_text" && hits.some(h => h.kind === "ocr")));
+    const caption = v.matches.description ? hl(v.matches.description) : esc(v.description || "");
+    return `<li class="row ${selected.has(v.id) ? "selected" : ""}" data-id="${esc(v.id)}">
+      <button type="button" class="thumb" data-open="${esc(v.id)}" aria-label="Ouvrir la publication de @${esc(v.author || "inconnu")}">${v.thumbnail ? `<img src="${esc(v.thumbnail)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}${len ? `<span class="len num">${len}</span>` : ""}</button>
+      <div style="min-width:0">
+        <p class="who"><a data-open="${esc(v.id)}" tabindex="0" role="button">@${esc(v.author || "inconnu")}</a>${v.kind === "photo" ? `<span class="kind">Carrousel</span>` : ""}<time>${esc(fmtDate(v.favorited_at))}</time></p>
+        ${caption ? `<p class="caption">${caption}</p>` : ""}
+        ${fields.map(([k, s]) => `<p class="found"><span class="where">${esc(labels[k] || k)}</span>${hl(s)}</p>`).join("")}
+        ${strip(v, hits, idx >= from)}
+        ${momentList(v, hits)}
+      </div>
+      <label class="pick" title="Sélectionner pour l'analyse"><input type="checkbox" data-sel="${esc(v.id)}" ${selected.has(v.id) ? "checked" : ""} aria-label="Sélectionner pour l'analyse"></label>
+    </li>`;
+  }).join("");
+  $("#results").innerHTML = head + `<ul class="list">${rows}</ul>` + (hasMore ? `<div class="loadmore"><button class="btn quiet" id="more" type="button">Afficher plus</button></div>` : "");
 }
 
 $("#results").addEventListener("click", e => {
@@ -271,108 +524,120 @@ $("#results").addEventListener("click", e => {
   const o = e.target.closest("[data-open]");
   if (o) openVideo(o.dataset.open, o.dataset.pos, o.dataset.tab);
 });
+$("#results").addEventListener("keydown", e => { if (e.key === "Enter" && e.target.matches("a[data-open]")) e.target.click(); });
 
-// ---------- sélection & analyse multiple ----------
+// ---------- filtres ----------
+$("#kindCtl").onclick = e => {
+  const b = e.target.closest("[data-kind]"); if (!b) return;
+  kindFilter = b.dataset.kind;
+  document.querySelectorAll("#kindCtl button").forEach(x => x.setAttribute("aria-pressed", x === b));
+  doSearch();
+};
+$("#fieldboxes").onclick = e => {
+  const c = e.target.closest(".fchip"); if (!c) return;
+  c.setAttribute("aria-pressed", c.getAttribute("aria-pressed") !== "true");
+  if ($("#q").value.trim()) doSearch();
+};
+$("#any").onchange = $("#sort").onchange = () => $("#q").value.trim() && doSearch();
+
+// ---------- sélection & analyse ----------
 function toggleSel(id, on) {
   on ? selected.add(id) : selected.delete(id);
-  document.querySelector(`.result[data-id="${CSS.escape(id)}"]`)?.classList.toggle("selected", on);
+  document.querySelector(`.row[data-id="${CSS.escape(id)}"]`)?.classList.toggle("selected", on);
   $("#selbar").hidden = !selected.size;
-  $("#selcount").textContent = `${selected.size} sélectionnée(s)`;
+  $("#selcount").textContent = `${selected.size} sélectionnée${selected.size > 1 ? "s" : ""}`;
 }
 $("#selAll").onclick = () => lastResults.forEach(v => { toggleSel(v.id, true); const c = document.querySelector(`[data-sel="${CSS.escape(v.id)}"]`); if (c) c.checked = true; });
 $("#selClear").onclick = () => { [...selected].forEach(id => toggleSel(id, false)); document.querySelectorAll("[data-sel]").forEach(c => c.checked = false); };
 $("#analyzeSel").onclick = () => runAnalysis([...selected], $("#mode").value);
 
+const closeBtn = id => `<button class="icon-btn" type="button" onclick="document.getElementById('${id}').close()" aria-label="Fermer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button>`;
+
 async function runAnalysis(ids, mode, force = false, target = null, cachedOnly = false) {
   const btns = document.querySelectorAll("#analyzeSel, .an-run"); btns.forEach(b => b.disabled = true);
   const box = target || $("#adlgBody");
-  if (!target) { $("#adlgTitle").textContent = `Analyse de ${ids.length} publication(s)`; $("#adlgActions").innerHTML = closeBtn("adlg"); $("#adlg").showModal(); }
-  box.innerHTML = `<p class="muted">Analyse en cours… (${ids.length} publication(s), mode ${esc(mode)}${mode === "screens" ? " — téléchargement et sélection des captures" : ""})</p>`;
+  if (!target) { $("#adlgTitle").textContent = `Analyse de ${plural(ids.length, "publication")}`; $("#adlgActions").innerHTML = closeBtn("adlg"); $("#adlg").showModal(); }
+  if (!cachedOnly) box.innerHTML = `<p class="muted">Analyse en cours${mode === "screens" ? " : sélection des captures, puis lecture par l'IA" : ""}…</p>`;
   try {
     const data = await api("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids, mode, force, cached_only: cachedOnly }) });
     box.innerHTML = renderAnalysis(data, ids.length === 1);
     if (!target) {
       const q = `ids=${ids.map(encodeURIComponent).join(",")}&mode=${encodeURIComponent(mode)}`;
-      $("#adlgActions").innerHTML = `<a class="btn secondary" href="/api/analyze/export?${q}&format=md">Markdown</a><a class="btn secondary" href="/api/analyze/export?${q}&format=csv">CSV</a><a class="btn secondary" href="/api/analyze/export?${q}&format=json" target="_blank">JSON</a>` + closeBtn("adlg");
+      $("#adlgActions").innerHTML = `<a class="btn quiet" href="/api/analyze/export?${q}&format=md">Markdown</a><a class="btn quiet" href="/api/analyze/export?${q}&format=csv">CSV</a><a class="btn quiet" href="/api/analyze/export?${q}&format=json" target="_blank">JSON</a>` + closeBtn("adlg");
     }
     refresh();
-  } catch (err) { box.innerHTML = `<p style="color:var(--accent)">${esc(err.message)}</p>`; }
+  } catch (err) { box.innerHTML = `<div class="warn-box">${esc(err.message)}</div>`; }
   btns.forEach(b => b.disabled = false);
 }
-const closeBtn = id => `<button class="secondary" onclick="document.getElementById('${id}').close()">✕</button>`;
 
-const CAT = { tools: "🛠 Outils & applis", websites: "🌐 Sites web", products: "📦 Produits, livres, formations", people: "👤 Comptes & marques", promo_codes: "🏷 Codes promo", domains: "🔗 Domaines détectés (local)" };
-
-function whereChip(id, where, author, single) {
+const CAT = { tools: "Outils et applis", websites: "Sites", products: "Produits, livres, formations", people: "Comptes et marques", promo_codes: "Codes promo", domains: "Adresses repérées dans le texte" };
+const posFrom = w => { const m = /page\s*(\d+)/i.exec(w || ""), t = /(\d+):(\d{2})/.exec(w || ""); return m ? `page:${m[1]}` : t ? `t:${+t[1] * 60 + +t[2]}` : ""; };
+function refBtn(id, where, author, single) {
   if (!where && single) return "";
-  const m = /page\s*(\d+)/i.exec(where || ""), t = /(\d+):(\d{2})/.exec(where || "");
-  const pos = m ? `page:${m[1]}` : t ? `t:${+t[1] * 60 + +t[2]}` : "";
-  const label = single ? where : `@${author || "?"}${where ? " · " + where : ""}`;
-  return `<button class="chip" data-open="${esc(id)}" data-pos="${pos}"><b>${m ? "🖼" : "▶"}</b>${esc(label)}</button>`;
+  const label = single ? where : `@${author || "?"}${where ? " " + where : ""}`;
+  return `<button type="button" class="ref" data-open="${esc(id)}" data-pos="${posFrom(where)}">${esc(label)}</button>`;
 }
+const linkify = (name, url) => url ? `<a href="${esc(/^https?:/.test(url) ? url : "https://" + url)}" target="_blank" rel="noopener">${esc(name)}</a>` : esc(name);
 
 function renderAnalysis(data, single) {
   const agg = data.aggregate, results = data.results;
   let html = "";
   const errors = results.filter(r => r.error);
-  if (errors.length) html += `<p style="color:var(--accent)">⚠️ IA indisponible pour ${errors.length} publication(s) : ${esc(errors[0].error)} — seule l'extraction locale est affichée.</p>`;
-  if (results.every(r => r.provider === "none")) html += `<p class="muted small">Aucune IA configurée : extraction locale gratuite seulement. Ajoute une clé <code>GEMINI_API_KEY</code> (gratuite) ou utilise Ollama pour une analyse complète.</p>`;
+  if (errors.length) html += `<div class="warn-box">L'IA n'a pas pu répondre pour ${plural(errors.length, "publication")} : ${esc(errors[0].error)}. Les informations ci-dessous viennent de l'extraction locale.</div>`;
+  if (results.every(r => r.provider === "none")) html += `<div class="info-box">Pas d'IA configurée : seuls les liens, comptes et codes trouvés dans le texte sont listés. Ajoute une clé <b>GEMINI_API_KEY</b> gratuite pour obtenir outils, étapes et résumé.</div>`;
   for (const v of agg.videos) {
-    html += `<div class="an-sec"><h2>${single ? "" : `<a data-open="${esc(v.video_id)}" style="cursor:pointer">@${esc(v.author)}</a> — `}${esc(v.topic)}</h2><p>${esc(v.summary)}</p>
+    html += `<div class="an-sec">${single ? "" : `<h3><a data-open="${esc(v.video_id)}" href="#" onclick="return false">@${esc(v.author)}</a><span class="muted">${esc(v.topic)}</span></h3>`}
+      <p class="an-summary">${esc(v.summary)}</p>
       ${v.key_points.length ? `<ul>${v.key_points.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
-      ${v.steps.length ? `<p class="muted">Étapes</p><ol>${v.steps.map(p => `<li>${esc(p)}</li>`).join("")}</ol>` : ""}</div>`;
+      ${v.steps.length ? `<h3>Étapes</h3><ol>${v.steps.map(p => `<li>${esc(p)}</li>`).join("")}</ol>` : ""}</div>`;
   }
   for (const [cat, label] of Object.entries(CAT)) {
     const items = agg[cat] || [];
     if (!items.length) continue;
-    html += `<div class="an-sec"><h2>${label} <span class="muted small">(${items.length})</span></h2>` + items.map(it => `
-      <div class="an-item"><b>${it.url ? `<a href="${esc(/^https?:/.test(it.url) ? it.url : "https://" + it.url)}" target="_blank" rel="noopener">${esc(it.name)}</a>` : esc(it.name)}</b>
-        ${it.category ? `<span class="tag">${esc(it.category)}</span>` : ""}${!single && it.sources.length > 1 ? `<span class="tag">${it.sources.length} vidéos</span>` : ""}
-        ${it.details ? `<div class="muted small">${esc(it.details)}</div>` : ""}
-        <div class="chips">${it.sources.map(s => whereChip(s.video_id, s.where, s.author, single)).join("")}</div></div>`).join("") + "</div>";
+    html += `<div class="an-sec"><h3>${label}<span class="muted num">${items.length}</span></h3><ul class="an-list">${items.map(it => `
+      <li><div class="an-name">${linkify(it.name, it.url)}${it.category ? `<span class="cat">${esc(it.category)}</span>` : ""}${!single && it.sources.length > 1 ? `<span class="cat">dans ${it.sources.length} publications</span>` : ""}</div>
+        ${it.details ? `<div class="small muted">${esc(it.details)}</div>` : ""}
+        ${it.sources.some(s => s.where || !single) ? `<div class="an-refs">${it.sources.map(s => refBtn(s.video_id, s.where, s.author, single)).join("")}</div>` : ""}</li>`).join("")}</ul></div>`;
   }
-  // extractions locales complémentaires (liens, @comptes, codes, prix)
-  const loc = { links: "Liens", mentions: "@ comptes cités", promo_codes: "Codes repérés", prices: "Prix", emails: "E-mails" };
+  const loc = { links: "Liens", mentions: "Comptes cités", promo_codes: "Codes repérés", prices: "Prix", emails: "E-mails" };
   for (const [k, label] of Object.entries(loc)) {
     const rows = results.flatMap(r => (r.local[k] || []).map(x => ({ ...x, id: r.video_id })));
     if (!rows.length) continue;
-    html += `<div class="an-sec"><h2>${label} <span class="muted small">(local)</span></h2><div class="chips">` + rows.map(x =>
-      k === "links" ? `<a class="chip" href="${esc(x.value)}" target="_blank" rel="noopener">${esc(x.value)}</a>` :
-      `<button class="chip" data-open="${esc(x.id)}" data-pos="${x.where[0] && /page/.test(x.where[0]) ? "page:" + x.where[0].replace(/\D/g, "") : (/(\d+):(\d+)/.test(x.where[0] || "") ? "t:" + x.where[0].split(":").reduce((a, b) => a * 60 + +b, 0) : "")}"><b>${esc(x.value)}</b>${x.where.length ? `<span class="muted">${esc(x.where.join(", "))}</span>` : ""}</button>`).join("") + "</div></div>";
+    html += `<div class="an-sec"><h3>${label}</h3><div class="an-refs">${rows.map(x =>
+      k === "links" ? `<a class="ref" href="${esc(x.value)}" target="_blank" rel="noopener">${esc(x.value)}</a>`
+      : `<button type="button" class="ref ${k === "promo_codes" ? "code" : ""}" data-open="${esc(x.id)}" data-pos="${posFrom(x.where[0])}">${esc(x.value)}${x.where.length ? ` <span class="muted">${esc(x.where.join(", "))}</span>` : ""}</button>`).join("")}</div></div>`;
   }
   const shots = results.flatMap(r => r.screens.map(s => ({ ...s, id: r.video_id })));
-  if (shots.length) html += `<div class="an-sec"><h2>📸 Captures analysées</h2><div class="screens">${shots.map(s => {
-    const pos = /page/.test(s.label) ? "page:" + s.label.replace(/\D/g, "") : "t:" + s.label.split(":").reduce((a, b) => a * 60 + +b, 0);
-    return `<figure data-open="${esc(s.id)}" data-pos="${pos}"><img src="${esc(s.url)}" loading="lazy"><figcaption>${esc(s.label)}</figcaption></figure>`; }).join("")}</div></div>`;
+  if (shots.length) html += `<div class="an-sec"><h3>Captures envoyées à l'IA</h3><div class="screens">${shots.map(s =>
+    `<figure data-open="${esc(s.id)}" data-pos="${posFrom(s.label)}"><img src="${esc(s.url)}" alt="Capture ${esc(s.label)}" loading="lazy"><figcaption>${esc(s.label)}</figcaption></figure>`).join("")}</div></div>`;
   const usage = results.reduce((a, r) => ({ i: a.i + (r.usage?.input_tokens || 0), o: a.o + (r.usage?.output_tokens || 0), c: a.c + (r.cached ? 1 : 0) }), { i: 0, o: 0, c: 0 });
-  html += `<p class="muted small">${results[0]?.provider !== "none" ? `Modèle : ${esc(results[0]?.model)} · ` : ""}${usage.c}/${results.length} depuis le cache (gratuit) · tokens : ${usage.i} entrée / ${usage.o} sortie</p>`;
-  if (!html.includes("an-sec")) html += `<p class="empty">Rien d'exploitable trouvé.</p>`;
+  if (!html.includes("an-sec")) html += `<p class="muted">Aucun outil, site ni code trouvé dans cette publication.</p>`;
+  html += `<p class="an-foot num">${results[0]?.provider !== "none" ? `${esc(results[0]?.model)}. ` : ""}${usage.c ? `${usage.c} sur ${results.length} depuis le cache, sans frais. ` : ""}${usage.i ? `${usage.i.toLocaleString("fr-FR")} tokens envoyés, ${usage.o.toLocaleString("fr-FR")} reçus.` : ""}</p>`;
   return html;
 }
-
 $("#adlgBody").addEventListener("click", e => { const o = e.target.closest("[data-open]"); if (o) { $("#adlg").close(); openVideo(o.dataset.open, o.dataset.pos); } });
 
-// ---------- fenêtre vidéo / carrousel ----------
-let cur = null; // {video, segments, analysis, page, pendingSeek, tab}
+// ---------- lecteur ----------
+let cur = null;
 
 async function openVideo(id, pos, tab) {
-  const q = lastQuery;
   let data;
-  try { data = await api(`/api/video/${encodeURIComponent(id)}?q=${encodeURIComponent(q)}`); }
+  try { data = await api(`/api/video/${encodeURIComponent(id)}?q=${encodeURIComponent(lastQuery)}`); }
   catch (err) { toast(err.message); return; }
-  cur = { ...data, page: 1, pendingSeek: null, ready: false, filter: q };
+  cur = { ...data, page: 1, pendingSeek: null, ready: false, filter: lastQuery };
   const v = data.video;
-  $("#dlgTitle").innerHTML = `<b>@${esc(v.author || "inconnu")}</b> <span class="muted small">${v.kind === "photo" ? `Carrousel · ${v.images.length} pages` : (v.duration ? fmt(v.duration) : "")}</span>`;
+  $("#dlgTitle").innerHTML = `<b>@${esc(v.author || "inconnu")}</b> <span class="small muted">${v.kind === "photo" ? `Carrousel de ${v.images.length} pages` : (v.duration ? fmt(v.duration) : "")}</span>`;
   $("#dlgOpen").href = v.url;
   renderPlayer();
-  const tabs = [["transcript", "Transcription"], ["ocr", v.kind === "photo" ? "Texte des pages" : "Texte à l'écran"], ["analysis", "Analyse IA"], ["info", "Infos"]];
-  $("#tabs").innerHTML = tabs.map(([k, l]) => `<button data-tab="${k}">${l}</button>`).join("");
+  const count = k => data.segments.filter(s => s.kind === k && s.match).length;
+  const tabs = [["transcript", "Transcription"], ["ocr", v.kind === "photo" ? "Texte des pages" : "Texte à l'écran"], ["analysis", "Analyse"], ["info", "Détails"]];
+  $("#tabs").innerHTML = tabs.map(([k, l]) => { const n = (k === "transcript" || k === "ocr") ? count(k) : 0;
+    return `<button type="button" role="tab" data-tab="${k}" aria-selected="false">${l}${n ? `<span class="count num">${n}</span>` : ""}</button>`; }).join("");
   const firstHit = data.segments.find(s => s.match && s.kind === "transcript") || data.segments.find(s => s.match);
   showTab(tab || (firstHit ? firstHit.kind : (v.kind === "photo" ? "ocr" : "transcript")));
   if (!$("#dlg").open) $("#dlg").showModal();
   if (pos) goTo(pos);
 }
-
 function closeDlg() { $("#dlg").close(); }
 $("#dlg").addEventListener("close", () => { $("#player").innerHTML = ""; cur = null; });
 
@@ -380,18 +645,19 @@ function renderPlayer() {
   const v = cur.video;
   if (v.kind === "photo") {
     const n = v.images.length;
-    $("#player").innerHTML = n ? `<div class="carousel"><a id="imglink" target="_blank"><img id="pageimg" alt=""></a>
-      <button class="nav prev" onclick="goTo('page:'+(cur.page-1))">‹</button><button class="nav next" onclick="goTo('page:'+(cur.page+1))">›</button></div>
-      <div class="pages">${v.images.map((_, i) => `<button data-page="${i + 1}" onclick="goTo('page:${i + 1}')">${i + 1}</button>`).join("")}</div>`
-      : `<p class="muted">Images non disponibles.</p>`;
+    const hitPages = new Set(cur.segments.filter(s => s.match && s.page).map(s => s.page));
+    $("#player").innerHTML = n ? `<div class="carousel"><a id="imglink" target="_blank" rel="noopener"><img id="pageimg" alt=""></a>
+      <button class="nav prev" type="button" onclick="goTo('page:'+(cur.page-1))" aria-label="Page précédente">‹</button><button class="nav next" type="button" onclick="goTo('page:'+(cur.page+1))" aria-label="Page suivante">›</button></div>
+      <div class="pages-strip">${v.images.map((_, i) => `<button type="button" data-page="${i + 1}" class="${hitPages.has(i + 1) ? "hit" : ""}" onclick="goTo('page:${i + 1}')">${i + 1}</button>`).join("")}</div>
+      <p class="note">Les flèches du clavier tournent les pages.</p>`
+      : `<p class="muted">Les images de ce carrousel ne sont pas disponibles.</p>`;
     if (n) goTo("page:1");
   } else if (v.media_path) {
     $("#player").innerHTML = `<video id="vid" src="${esc(v.media_path)}" controls autoplay playsinline poster="${esc(v.thumbnail)}"></video>`;
     $("#vid").addEventListener("timeupdate", syncActive);
   } else {
-    // Lecteur officiel TikTok : on lui envoie seekTo via postMessage.
-    $("#player").innerHTML = `<iframe id="ttplayer" allow="autoplay; fullscreen; encrypted-media" src="https://www.tiktok.com/player/v1/${encodeURIComponent(v.id)}?autoplay=1&music_info=0&description=0&rel=0&native_context_menu=0"></iframe>
-      <p class="muted small">Astuce : active <code>TTS_KEEP_VIDEO=on</code> pour une lecture locale avec saut aux timecodes 100 % fiable.</p>`;
+    $("#player").innerHTML = `<iframe id="ttplayer" title="Lecteur TikTok" allow="autoplay; fullscreen; encrypted-media" src="https://www.tiktok.com/player/v1/${encodeURIComponent(v.id)}?autoplay=1&music_info=0&description=0&rel=0&native_context_menu=0"></iframe>
+      <p class="note">Si le saut au bon moment ne marche pas, active TTS_KEEP_VIDEO pour lire la vidéo en local.</p>`;
   }
 }
 
@@ -416,15 +682,16 @@ function goTo(pos) {
     const n = cur.video.images.length; if (!n) return;
     cur.page = Math.min(n, Math.max(1, +val));
     $("#pageimg").src = cur.video.images[cur.page - 1];
+    $("#pageimg").alt = `Page ${cur.page} sur ${n}`;
     $("#imglink").href = cur.video.images[cur.page - 1];
-    document.querySelectorAll(".pages button").forEach(b => b.classList.toggle("on", +b.dataset.page === cur.page));
+    document.querySelectorAll(".player .pages-strip button").forEach(b => b.classList.toggle("on", +b.dataset.page === cur.page));
     syncActive();
   } else {
     const t = Math.max(0, +val - 0.5);
     const vid = $("#vid");
     if (vid) { vid.currentTime = t; vid.play().catch(() => {}); }
     else if (cur.ready) ttSeek(t);
-    else { cur.pendingSeek = t; setTimeout(() => { if (cur && cur.pendingSeek != null) { ttSeek(cur.pendingSeek); } }, 2500); }
+    else { cur.pendingSeek = t; setTimeout(() => { if (cur && cur.pendingSeek != null) ttSeek(cur.pendingSeek); }, 2500); }
   }
 }
 
@@ -432,56 +699,59 @@ function syncActive() {
   if (!cur) return;
   const t = $("#vid") ? $("#vid").currentTime : cur.time;
   document.querySelectorAll(".seg").forEach(el => {
-    const on = cur.video.kind === "photo" ? +el.dataset.page === cur.page
-      : (t != null && +el.dataset.start <= t + 0.3 && t < +el.dataset.end);
+    const on = cur.video.kind === "photo" ? +el.dataset.page === cur.page : (t != null && el.dataset.start !== "" && +el.dataset.start <= t + 0.3 && t < +el.dataset.end);
     el.classList.toggle("active", !!on);
   });
 }
 
 function showTab(tab) {
   cur.tab = tab;
-  document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
+  document.querySelectorAll("#tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === tab));
   const v = cur.video;
   if (tab === "transcript" || tab === "ocr") {
     const segs = cur.segments.filter(s => s.kind === tab);
     const n = segs.filter(s => s.match).length;
-    $("#tabbody").innerHTML = `<div class="row" style="margin:0 0 10px"><input type="text" id="segfilter" placeholder="Surligner des mots…" value="${esc(cur.filter)}" style="flex:1;min-width:0">
-      <button class="secondary" id="copyseg">Copier</button></div>
-      ${cur.filter ? `<p class="muted small">${n} passage(s) correspondant(s)${n ? ` — <a href="#" id="nexthit">aller au suivant</a>` : ""}</p>` : ""}
-      <div class="seglist">${segs.length ? segs.map(s => `<div class="seg ${s.match ? "hit" : ""}" data-start="${s.start ?? ""}" data-end="${s.end ?? ""}" data-page="${s.page ?? ""}" data-pos="${s.page ? "page:" + s.page : "t:" + s.start}">
-        <span class="tc">${s.page ? "Page " + s.page : fmt(s.start)}</span><span class="tx">${hl(s.text)}</span></div>`).join("")
-        : `<p class="empty">${tab === "transcript" ? (v.kind === "photo" ? "Un carrousel n'a pas de transcription." : "Pas de transcription (pas de sous-titres TikTok, et Whisper n'est pas installé).") : "Pas de texte détecté (OCR désactivé ou rien d'écrit)."}</p>`}</div>`;
+    const emptyMsg = tab === "transcript"
+      ? (v.kind === "photo" ? "Un carrousel n'a pas de piste parlée." : "Pas de transcription : TikTok ne fournit pas de sous-titres pour cette vidéo et Whisper n'est pas installé.")
+      : "Aucun texte détecté. Active l'OCR dans les réglages pour lire le texte affiché.";
+    $("#tabbody").innerHTML = `<div class="toolrow"><input type="search" id="segfilter" placeholder="Surligner des mots dans le texte" value="${esc(cur.filter)}" aria-label="Surligner des mots">
+        ${n ? `<button class="btn quiet" type="button" id="nexthit">Passage suivant</button>` : ""}<button class="btn bare" type="button" id="copyseg">Copier</button></div>
+      ${cur.filter && segs.length ? `<p class="small muted" style="margin:0 0 8px">${n ? `${plural(n, "passage")} surligné${n > 1 ? "s" : ""}.` : "Aucun passage ne contient ces mots."}</p>` : ""}
+      <div class="seglist">${segs.length ? segs.map(s => `<div class="seg ${s.match ? "hit" : ""}" data-start="${s.start ?? ""}" data-end="${s.end ?? ""}" data-page="${s.page ?? ""}" data-pos="${s.page ? "page:" + s.page : "t:" + s.start}" tabindex="0">
+        <span class="tc">${s.page ? "p. " + s.page : fmt(s.start)}</span><span class="tx">${hl(s.text)}</span></div>`).join("") : `<p class="muted">${emptyMsg}</p>`}</div>`;
     $("#segfilter").onchange = async e => { cur.filter = e.target.value; try { const d = await api(`/api/video/${encodeURIComponent(v.id)}?q=${encodeURIComponent(cur.filter)}`); cur.segments = d.segments; showTab(tab); } catch (err) { toast(err.message); } };
-    $("#copyseg").onclick = () => { navigator.clipboard.writeText(segs.map(s => `[${s.page ? "p." + s.page : fmt(s.start)}] ${s.text.replace(/[\x02\x03]/g, "")}`).join("\n")); toast("Copié"); };
+    $("#copyseg").onclick = () => navigator.clipboard?.writeText(segs.map(s => `[${s.page ? "p." + s.page : fmt(s.start)}] ${plain(s.text)}`).join("\n")).then(() => toast("Texte copié"), () => toast("Copie impossible"));
     let hitIdx = -1;
-    $("#nexthit")?.addEventListener("click", e => { e.preventDefault(); const hits = [...document.querySelectorAll(".seg.hit")]; if (!hits.length) return; hitIdx = (hitIdx + 1) % hits.length; hits[hitIdx].scrollIntoView({ block: "center" }); goTo(hits[hitIdx].dataset.pos); });
-    document.querySelectorAll(".seg").forEach(el => el.onclick = () => goTo(el.dataset.pos));
+    $("#nexthit")?.addEventListener("click", () => { const hits = [...document.querySelectorAll(".seg.hit")]; if (!hits.length) return; hitIdx = (hitIdx + 1) % hits.length; hits[hitIdx].scrollIntoView({ block: "center" }); goTo(hits[hitIdx].dataset.pos); });
+    document.querySelectorAll(".seg").forEach(el => { el.onclick = () => goTo(el.dataset.pos); el.onkeydown = e => { if (e.key === "Enter") goTo(el.dataset.pos); }; });
     document.querySelector(".seg.hit")?.scrollIntoView({ block: "center" });
     syncActive();
   } else if (tab === "analysis") {
-    $("#tabbody").innerHTML = `<div class="row" style="margin:0 0 12px">
-        <button class="an-run" data-mode="text">Analyser (texte, le moins cher)</button>
-        <button class="an-run secondary" data-mode="screens">Analyser avec smart screens</button>
-      </div><div id="anbox">${cur.analysis ? "" : `<p class="muted">Pas encore analysée. L'extraction des liens, @comptes et codes promo est gratuite ; l'IA ${features.llm !== "none" ? `(${esc(features.llm_model)})` : "n'est pas configurée"} complète avec les outils, sites, produits, étapes…</p>`}</div>`;
+    $("#tabbody").innerHTML = `<div class="runrow">
+        <button class="btn an-run" type="button" data-mode="text">Analyser le texte</button>
+        <button class="btn quiet an-run" type="button" data-mode="screens">Analyser avec les captures</button>
+      </div><div id="anbox">${cur.analysis ? "" : `<p class="muted">L'analyse liste les outils, sites, produits, comptes et étapes de cette publication, avec le moment où ils apparaissent. ${features.llm !== "none" ? `Le texte seul coûte quelques milliers de tokens (${esc(features.llm_model)}).` : "Sans IA configurée, seuls les liens et codes trouvés dans le texte sont listés."}</p>`}</div>`;
     document.querySelectorAll(".an-run").forEach(b => b.onclick = () => runAnalysis([v.id], b.dataset.mode, false, $("#anbox")));
-    // Affiche l'analyse déjà faite sans jamais refacturer (cached_only).
-    if (cur.analysis) runAnalysis([v.id], cur.analysis.mode, false, $("#anbox"), true);
+    if (cur.analysis) runAnalysis([v.id], cur.analysis.mode, false, $("#anbox"), true);   // affichage seul, jamais facturé
   } else {
-    $("#tabbody").innerHTML = `<p style="white-space:pre-wrap">${esc(v.description) || '<span class="muted">Pas de légende.</span>'}</p>
-      <p class="muted">${esc(v.hashtags)}</p>
-      ${v.entities ? `<p><span class="tag">outils & sites</span>${esc(v.entities)}</p>` : ""}
-      <p class="muted small">Ajoutée aux favoris : ${esc(v.favorited_at || "?")} · ID ${esc(v.id)}</p>
-      <div class="row"><a class="btn" href="${esc(v.url)}" target="_blank" rel="noopener">Ouvrir sur TikTok ↗</a>
-      <button class="secondary" data-copy="${esc(v.url)}">Copier le lien</button></div>`;
+    $("#tabbody").innerHTML = `<p style="white-space:pre-wrap;margin-top:0">${esc(v.description) || '<span class="muted">Pas de légende.</span>'}</p>
+      ${v.hashtags ? `<p class="muted">${esc(v.hashtags)}</p>` : ""}
+      ${v.entities ? `<p><span class="muted">Repérés par l'analyse : </span>${esc(v.entities)}</p>` : ""}
+      <p class="small muted">Ajouté aux favoris le ${esc(fmtDate(v.favorited_at) || "?")}. Identifiant ${esc(v.id)}.</p>
+      <div class="runrow"><a class="btn" href="${esc(v.url)}" target="_blank" rel="noopener">Ouvrir sur TikTok</a><button class="btn quiet" type="button" data-copy="${esc(v.url)}">Copier le lien</button></div>`;
   }
 }
 $("#tabs").addEventListener("click", e => { const b = e.target.closest("[data-tab]"); if (b) showTab(b.dataset.tab); });
 $("#tabbody").addEventListener("click", e => {
   const c = e.target.closest("[data-copy]");
-  if (c) { navigator.clipboard?.writeText(c.dataset.copy).then(() => toast("Lien copié"), () => toast("Copie impossible")); return; } const o = e.target.closest("[data-open]"); if (o && cur) { if (o.dataset.open === cur.video.id) goTo(o.dataset.pos); else openVideo(o.dataset.open, o.dataset.pos); } });
+  if (c) { navigator.clipboard?.writeText(c.dataset.copy).then(() => toast("Lien copié"), () => toast("Copie impossible")); return; }
+  const o = e.target.closest("[data-open]");
+  if (o && cur) { if (o.dataset.open === cur.video.id) goTo(o.dataset.pos); else openVideo(o.dataset.open, o.dataset.pos); }
+});
 document.addEventListener("keydown", e => {
-  if (e.key === "/" && document.activeElement.tagName !== "INPUT" && document.activeElement.tagName !== "TEXTAREA") { e.preventDefault(); $("#q").focus(); }
-  if (cur && cur.video.kind === "photo" && $("#dlg").open && document.activeElement.tagName !== "INPUT") {
+  const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName);
+  if (e.key === "/" && !typing) { e.preventDefault(); if ($("#dlg").open) closeDlg(); $("#q").focus(); $("#q").select(); }
+  if (cur && cur.video.kind === "photo" && $("#dlg").open && !typing) {
     if (e.key === "ArrowRight") goTo("page:" + (cur.page + 1));
     if (e.key === "ArrowLeft") goTo("page:" + (cur.page - 1));
   }
@@ -489,20 +759,25 @@ document.addEventListener("keydown", e => {
 
 // ---------- imports ----------
 async function post(url, body) {
-  $("#msg").textContent = "…";
+  $("#msg").textContent = "Un instant…";
   try {
     const j = await api(url, { method: "POST", body });
-    $("#msg").textContent = j.found !== undefined ? `${j.found} publication(s) trouvée(s), ${j.added} nouvelle(s).${j.added ? " Indexation en cours…" : ""}`
-      : j.status ? `TikTok : ${j.status}` : j.cancelling !== undefined ? "Arrêt demandé…" : j.started === false ? "Une indexation est déjà en cours : elle prendra aussi ces vidéos." : "C'est parti.";
-  } catch (err) { $("#msg").textContent = "⚠️ " + err.message; }
+    $("#msg").textContent = j.found !== undefined ? `${plural(j.found, "publication")} trouvée${j.found > 1 ? "s" : ""}, dont ${j.added} nouvelle${j.added > 1 ? "s" : ""}.${j.added ? " L'indexation démarre." : ""}`
+      : j.status ? `TikTok : ${j.status}` : j.cancelling !== undefined ? "Arrêt demandé." : j.started === false ? "Une indexation tourne déjà ; elle prendra aussi ces vidéos." : "Indexation lancée.";
+  } catch (err) { $("#msg").textContent = err.message; }
   refresh();
 }
+const fileInput = $("#upload input[type=file]");
+fileInput.onchange = () => $("#fileLabel").textContent = fileInput.files[0]?.name || "Choisir le .zip ou le .json…";
+["dragover", "dragleave", "drop"].forEach(ev => $("#filePick").addEventListener(ev, e => {
+  e.preventDefault(); $("#filePick").classList.toggle("drag", ev === "dragover");
+  if (ev === "drop" && e.dataTransfer.files.length) { fileInput.files = e.dataTransfer.files; fileInput.onchange(); }
+}));
 $("#search").onsubmit = doSearch;
-$("#filters").onchange = () => doSearch();
 $("#upload").onsubmit = e => { e.preventDefault(); post("/api/import", new FormData(e.target)); };
 $("#links").onsubmit = e => { e.preventDefault(); post("/api/links", new FormData(e.target)); };
 $("#retry").onclick = () => post("/api/process?retry_errors=true");
-$("#reindex").onclick = () => confirm("Tout réindexer ? (re-télécharge les infos de chaque favori)") && post("/api/reindex");
+$("#reindex").onclick = () => confirm("Tout réindexer ? Les infos de chaque favori seront téléchargées à nouveau.") && post("/api/reindex");
 $("#sync").onclick = () => post("/api/tiktok/sync");
 const initial = new URLSearchParams(location.search).get("q");
 refresh().then(() => { if (initial) $("#q").value = initial; doSearch(); });

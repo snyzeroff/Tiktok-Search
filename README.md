@@ -21,6 +21,18 @@ plusieurs publications pour en extraire outils, sites, produits, comptes, étape
 - 📸 **Smart screens** : au lieu d'envoyer la vidéo à l'IA, on garde seulement les captures *réellement
   différentes* (empreinte perceptuelle), réduites à 768 px.
 
+## Interface
+
+- **Frise des moments** sous chaque résultat : la durée de la vidéo, avec un repère jaune à chaque
+  correspondance (rond = mot prononcé, carré = texte à l'écran). Un clic ouvre la vidéo au bon moment.
+  Pour un carrousel, les pages contenant la recherche sont surlignées.
+- Thème clair, sombre ou automatique ; police Bricolage Grotesque (OFL) servie en local, donc l'outil
+  fonctionne hors ligne ; responsive jusqu'au mobile ; navigation au clavier (`/`, ←/→, Entrée) ;
+  animations désactivées si le système le demande.
+- Direction visuelle construite avec les principes des skills de design `frontend-design`
+  (Anthropic), `refactoring-ui` et `oil-ui` : une seule couleur de surlignage réservée aux
+  correspondances, la structure visuelle au service de l'information, aucune décoration gratuite.
+
 ## Coût : pensé pour être (presque) gratuit
 
 | Étape | Coût |
